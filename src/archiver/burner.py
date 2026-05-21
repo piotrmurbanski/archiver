@@ -31,6 +31,16 @@ class VerifyResult:
     checked_files: int
 
 
+def _format_bytes(size: int) -> str:
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{value:.2f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
 def _disc_row(conn: sqlite3.Connection, disc_code: str) -> sqlite3.Row:
     row = conn.execute(
         """
@@ -68,9 +78,23 @@ def _copy_file(src: Path, dest: Path) -> None:
     shutil.copy2(src, dest)
 
 
+def _ensure_staging_space(settings: Settings) -> None:
+    target_dir = settings.staging_dir.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    usage = shutil.disk_usage(target_dir)
+    required_bytes = settings.disc_size_bytes
+    if usage.free < required_bytes:
+        raise RuntimeError(
+            "Not enough free space for staging: "
+            f"required at least {_format_bytes(required_bytes)}, "
+            f"available {_format_bytes(usage.free)} in {target_dir}"
+        )
+
+
 def stage_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> StageResult:
     disc = _disc_row(conn, disc_code)
     files = _disc_files(conn, disc["id"])
+    _ensure_staging_space(settings)
     stage_dir = settings.staging_dir / disc_code
     if stage_dir.exists():
         shutil.rmtree(stage_dir)
