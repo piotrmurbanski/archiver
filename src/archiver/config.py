@@ -32,6 +32,8 @@ class Settings:
     scan_hour: int
     optical_device: str | None
     verify_mount: Path
+    auto_plan: bool
+    notify_command: str | None
 
     @property
     def planning_limit_bytes(self) -> int:
@@ -54,6 +56,8 @@ def load_settings() -> Settings:
     scan_hour = int(os.environ.get("ARCHIVER_SCAN_HOUR", "10"))
     optical_device = os.environ.get("ARCHIVER_OPTICAL_DEVICE") or None
     verify_mount = Path(os.environ.get("ARCHIVER_VERIFY_MOUNT", "/mnt/archiver-disc")).expanduser()
+    auto_plan = os.environ.get("ARCHIVER_AUTO_PLAN", "true").strip().lower() in {"1", "true", "yes", "on"}
+    notify_command = os.environ.get("ARCHIVER_NOTIFY_COMMAND") or None
     return Settings(
         db_path=db_path,
         roots=roots,
@@ -68,4 +72,6 @@ def load_settings() -> Settings:
         scan_hour=scan_hour,
         optical_device=optical_device,
         verify_mount=verify_mount,
+        auto_plan=auto_plan,
+        notify_command=notify_command,
     )

@@ -6,10 +6,12 @@ Aktualny zakres MVP:
 - tygodniowy skan katalogow z NAS
 - lokalna baza SQLite ze stanem plikow
 - planowanie kolejnej plyty wedlug limitu pojemnosci
+- automatyczne planowanie plyty po przekroczeniu progu pojemnosci
+- lokalne notyfikacje po `scan`, `approve`, `stage`, `burn` i `verify`
 - generowanie indeksu `CSV` i manifestu `JSON` dla kazdej planowanej plyty
+- przygotowanie `staging/`, budowa ISO i nagrywanie przez `xorriso`
+- weryfikacja zawartosci po zamontowaniu plyty
 - prosty lokalny Web UI do podgladu kolejki i historii
-
-Nagrywanie i pelna weryfikacja po nagraniu sa przygotowane w modelu danych, ale nie zostaly jeszcze zintegrowane z `xorriso` lub `growisofs`.
 
 ## Instalacja
 
@@ -37,11 +39,13 @@ ARCHIVER_DISC_SIZE_GB=100
 ARCHIVER_FILL_RATIO=0.93
 ARCHIVER_WEB_HOST=127.0.0.1
 ARCHIVER_WEB_PORT=8765
+ARCHIVER_AUTO_PLAN=true
 ```
 
 `ARCHIVER_FILL_RATIO=0.93` oznacza planowanie paczek do 93 GiB netto dla plyty 100 GB.
 Przy `plan` powstaja pliki `manifests/DISC-XXXX.csv` i `manifests/DISC-XXXX.json`.
 CSV ma sluzyc jako prosty indeks do przeszukiwania po sciezkach i nazwach plikow.
+Jesli `ARCHIVER_AUTO_PLAN=true`, tygodniowy skan sam zaplanuje nowa plyte po przekroczeniu progu.
 
 W przypadku NAS, ktory jest codziennie offline w nocy, ustaw skan poza oknem niedostepnosci:
 
@@ -64,6 +68,9 @@ Skan katalogow:
 ```bash
 archiver scan
 ```
+
+Jesli po skanie uzbiera sie co najmniej `ARCHIVER_FILL_RATIO * ARCHIVER_DISC_SIZE_GB`,
+narzedzie automatycznie utworzy nowa partie i wysle lokalna notyfikacje.
 
 Planowanie kolejnej plyty:
 
@@ -137,6 +144,26 @@ ARCHIVER_ISO_DIR=/home/piotr/sandbox/archiver/iso
 ```
 
 `verify` oznacza pliki jako `verified` dopiero po zgodnosci hashy z zawartoscia plyty.
+
+## Notyfikacje
+
+Domyslnie Archiver probuje uzyc `notify-send`. Na Ubuntu zwykle wystarczy:
+
+```bash
+sudo apt-get install -y libnotify-bin
+```
+
+Mozesz tez podac wlasna komende:
+
+```bash
+ARCHIVER_NOTIFY_COMMAND=/usr/local/bin/archiver-notify
+```
+
+Komenda dostaje dwa argumenty:
+
+```text
+<title> <body>
+```
 
 ## Mount NAS przez automount
 

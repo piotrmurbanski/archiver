@@ -8,8 +8,9 @@ import uvicorn
 from .burner import burn_disc, stage_disc, verify_disc
 from .config import load_settings
 from .db import connect, init_db
+from .notifier import send_notification
 from .planner import approve_disc, plan_disc
-from .repository import status_summary
+from .repository import active_disc, pending_bytes, status_summary
 from .scanner import root_is_available, scan_sources
 from .web import create_app
 
@@ -78,6 +79,17 @@ def main() -> None:
             f"skipped={stats.skipped_files}",
             f"offline_roots={stats.offline_roots}",
         )
+        pending_total = pending_bytes(conn)
+        current_disc = active_disc(conn)
+        if settings.auto_plan and current_disc is None and pending_total >= settings.planning_limit_bytes:
+            result = plan_disc(conn, settings)
+            if result.disc_code is not None:
+                message = (
+                    f"{result.disc_code}: {result.file_count} files, "
+                    f"{_format_bytes(result.total_bytes)} ready for approval"
+                )
+                send_notification(settings, "Archiver: disc ready", message)
+                print(f"auto-planned: {message}")
         return
 
     if args.command == "status":
@@ -112,22 +124,26 @@ def main() -> None:
         ok = approve_disc(conn, args.disc_code)
         if not ok:
             raise SystemExit(f"Disc not found: {args.disc_code}")
+        send_notification(settings, "Archiver: disc approved", f"{args.disc_code} is ready for staging")
         print(f"Approved {args.disc_code}")
         return
 
     if args.command == "stage":
         result = stage_disc(conn, settings, args.disc_code)
+        send_notification(settings, "Archiver: staging ready", f"{result.disc_code} staged in {result.stage_dir}")
         print(f"Staged {result.disc_code} at {result.stage_dir} ({result.file_count} files)")
         return
 
     if args.command == "burn":
         result = burn_disc(conn, settings, args.disc_code)
+        send_notification(settings, "Archiver: burn complete", f"{result.disc_code} burned, run verify")
         print(f"Burned {result.disc_code} from {result.iso_path}")
         return
 
     if args.command == "verify":
         mount_path = Path(args.mount_path) if args.mount_path else None
         result = verify_disc(conn, settings, args.disc_code, mount_path=mount_path)
+        send_notification(settings, "Archiver: verify complete", f"{result.disc_code} verified successfully")
         print(f"Verified {result.disc_code}: {result.checked_files} files")
         return
 
