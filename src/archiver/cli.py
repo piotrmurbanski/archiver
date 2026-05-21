@@ -12,8 +12,8 @@ from .db import connect, init_db
 from .logging_setup import configure_logging
 from .notifier import send_notification
 from .planner import approve_disc, plan_disc
-from .repository import active_disc, pending_bytes, status_summary
-from .scanner import root_is_available, scan_sources
+from .repository import status_summary
+from .workflow import run_scan_cycle
 from .web import create_app
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("init-db")
     subparsers.add_parser("scan")
+    subparsers.add_parser("start")
     subparsers.add_parser("status")
     subparsers.add_parser("plan")
     stage = subparsers.add_parser("stage")
@@ -68,34 +69,8 @@ def main() -> None:
     init_db(conn)
 
     if args.command == "scan":
-        unavailable_roots = [str(root) for root in settings.roots if not root_is_available(root)]
-        if unavailable_roots:
-            print("scan skipped: NAS root unavailable")
-            for root in unavailable_roots:
-                print(f"  offline: {root}")
-            return
-        stats = scan_sources(conn, settings)
-        print(
-            "scan completed:",
-            f"scanned={stats.scanned_files}",
-            f"new={stats.new_files}",
-            f"changed={stats.changed_files}",
-            f"unchanged={stats.unchanged_files}",
-            f"missing_roots={stats.missing_roots}",
-            f"skipped={stats.skipped_files}",
-            f"offline_roots={stats.offline_roots}",
-        )
-        pending_total = pending_bytes(conn)
-        current_disc = active_disc(conn)
-        if settings.auto_plan and current_disc is None and pending_total >= settings.planning_limit_bytes:
-            result = plan_disc(conn, settings)
-            if result.disc_code is not None:
-                message = (
-                    f"{result.disc_code}: {result.file_count} files, "
-                    f"{_format_bytes(result.total_bytes)} ready for approval"
-                )
-                send_notification(settings, "Archiver: disc ready", message)
-                print(f"auto-planned: {message}")
+        result = run_scan_cycle(conn, settings)
+        print(result.message)
         return
 
     if args.command == "status":
@@ -161,6 +136,11 @@ def main() -> None:
 
     if args.command == "web":
         app = create_app(conn, settings)
+        uvicorn.run(app, host=settings.web_host, port=settings.web_port)
+        return
+
+    if args.command == "start":
+        app = create_app(conn, settings, startup_scan=True)
         uvicorn.run(app, host=settings.web_host, port=settings.web_port)
         return
 

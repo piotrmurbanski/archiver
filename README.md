@@ -102,6 +102,18 @@ archiver web
 
 Potem otworz `http://127.0.0.1:8765`.
 
+Jesli chcesz uruchomic wszystko jedna komenda, uzyj:
+
+```bash
+archiver start
+```
+
+Ta komenda:
+- uruchamia Web UI od razu
+- odpala skan w tle po starcie aplikacji
+- pozwala sledzic status skanu z poziomu przegladarki
+- pokazuje tez progress planowania i hashowania w formie `X/Y`
+
 ## Systemd
 
 Przykladowe pliki uslug sa w katalogu `systemd/`.

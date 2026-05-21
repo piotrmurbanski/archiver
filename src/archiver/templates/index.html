@@ -139,6 +139,10 @@
           <div class="muted">Zaplanowane</div>
           <div class="metric">{{ summary.counts.get("planned", 0) }}</div>
         </article>
+        <article class="card">
+          <div class="muted">Wszystkie pliki</div>
+          <div class="metric">{{ summary.total_files }}</div>
+        </article>
       </section>
 
       <section class="card" style="margin-bottom: 24px;">
@@ -166,10 +170,38 @@
       </section>
 
       <div class="actions">
+        <form method="post" action="/scan">
+          <button type="submit" class="secondary">Uruchom skan</button>
+        </form>
         <form method="post" action="/plan">
           <button type="submit">Zbuduj kolejna plyte</button>
         </form>
       </div>
+
+      <section class="card" style="margin-bottom: 24px;">
+        <h2>Status skanu</h2>
+        <p>
+          Stan: <strong>{{ scan_status["state"] }}</strong><br>
+          Start: {{ scan_status["started_at"] or "-" }}<br>
+          Koniec: {{ scan_status["finished_at"] or "-" }}
+        </p>
+        <p class="muted" style="white-space: pre-wrap;">{{ scan_status["message"] }}</p>
+      </section>
+
+      <section class="card" style="margin-bottom: 24px;">
+        <h2>Status planowania</h2>
+        <p>
+          Stan: <strong>{{ plan_status["state"] }}</strong><br>
+          Plyta: {{ plan_status["disc_code"] or "-" }}<br>
+          Start: {{ plan_status["started_at"] or "-" }}<br>
+          Koniec: {{ plan_status["finished_at"] or "-" }}
+        </p>
+        <p>
+          Progress:
+          <strong>{{ plan_status["hashed_files"] }}/{{ plan_status["total_files"] }}</strong>
+        </p>
+        <p class="muted" style="white-space: pre-wrap;">{{ plan_status["message"] }}</p>
+      </section>
 
       {% if not summary.planned_disc and summary.pending_bytes < settings.planning_limit_bytes %}
         <section class="card" style="margin-bottom: 24px;">
@@ -249,33 +281,33 @@
       </section>
 
       <section class="card" style="margin-top: 24px;">
-        <h2>Kolejka</h2>
-        {% if summary.pending_files %}
-          <table>
-            <thead>
-              <tr>
-                <th>Data</th>
-                <th>Kategoria</th>
-                <th>Status</th>
-                <th>Rozmiar</th>
-                <th>Sciezka</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for file in summary.pending_files %}
-                <tr>
-                  <td>{{ file["media_date"][:10] }}</td>
-                  <td>{{ file["category"] }}</td>
-                  <td>{{ file["status"] }}</td>
-                  <td>{{ (file["size_bytes"] / 1024 / 1024) | round(1) }} MiB</td>
-                  <td>{{ file["relative_path"] }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        {% else %}
-          <p class="muted">Brak plikow w kolejce.</p>
-        {% endif %}
+        <h2>Postep</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Etap</th>
+              <th>Liczba plikow</th>
+              <th>Postep</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Do zaplanowania</td>
+              <td>{{ summary.counts.get("new", 0) + summary.counts.get("changed_after_archive", 0) }}</td>
+              <td>{{ summary.counts.get("new", 0) + summary.counts.get("changed_after_archive", 0) }}/{{ summary.total_files }}</td>
+            </tr>
+            <tr>
+              <td>W aktywnej partii</td>
+              <td>{{ summary.counts.get("planned", 0) + summary.counts.get("approved", 0) + summary.counts.get("staged", 0) + summary.counts.get("burning", 0) + summary.counts.get("burned", 0) }}</td>
+              <td>{{ summary.counts.get("planned", 0) + summary.counts.get("approved", 0) + summary.counts.get("staged", 0) + summary.counts.get("burning", 0) + summary.counts.get("burned", 0) }}/{{ summary.total_files }}</td>
+            </tr>
+            <tr>
+              <td>Zweryfikowane</td>
+              <td>{{ summary.counts.get("verified", 0) }}</td>
+              <td>{{ summary.counts.get("verified", 0) }}/{{ summary.total_files }}</td>
+            </tr>
+          </tbody>
+        </table>
         <p class="warn">Domyslnie `burn` sam probuje zamontowac plyte i uruchomic `verify`. Reczny `archiver verify` jest potrzebny tylko wtedy, gdy naped nie udostepnil plyty do odczytu albo verify sie nie udal.</p>
       </section>
     </main>

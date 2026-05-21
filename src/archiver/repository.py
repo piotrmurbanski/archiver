@@ -23,6 +23,7 @@ def active_disc(conn: sqlite3.Connection):
 
 
 def status_summary(conn: sqlite3.Connection) -> dict[str, object]:
+    total_files_row = conn.execute("SELECT COUNT(*) AS count FROM files").fetchone()
     counts = {
         row["status"]: row["count"]
         for row in conn.execute(
@@ -39,15 +40,6 @@ def status_summary(conn: sqlite3.Connection) -> dict[str, object]:
         LIMIT 10
         """
     ).fetchall()
-    pending_files = conn.execute(
-        """
-        SELECT relative_path, size_bytes, category, media_date, status
-        FROM files
-        WHERE status IN ('new', 'changed_after_archive', 'planned', 'approved', 'staged', 'burning', 'burned')
-        ORDER BY media_date ASC, relative_path ASC
-        LIMIT 200
-        """
-    ).fetchall()
     roots = conn.execute(
         """
         SELECT source_root, MAX(last_seen_at) AS last_seen_at
@@ -57,10 +49,10 @@ def status_summary(conn: sqlite3.Connection) -> dict[str, object]:
         """
     ).fetchall()
     return {
+        "total_files": int(total_files_row["count"]),
         "counts": counts,
         "pending_bytes": pending_bytes_total,
         "planned_disc": planned_disc,
         "recent_discs": recent_discs,
-        "pending_files": pending_files,
         "roots": roots,
     }

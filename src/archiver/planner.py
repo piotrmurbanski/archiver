@@ -5,6 +5,7 @@ import json
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from .db import transaction
 from .hashing import hash_file
 
 logger = logging.getLogger(__name__)
+ProgressCallback = Callable[[str, int, int], None]
 
 
 def _should_report_progress(index: int, total: int, last_report_at: float, now: float) -> bool:
@@ -146,7 +148,11 @@ def _write_disc_indexes(
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def plan_disc(conn: sqlite3.Connection, settings: Settings) -> PlanResult:
+def plan_disc(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    progress_callback: ProgressCallback | None = None,
+) -> PlanResult:
     logger.info("planning disc with limit=%d bytes", settings.planning_limit_bytes)
     already_planned = conn.execute(
         "SELECT disc_code, file_count, planned_bytes FROM discs WHERE status IN ('planned', 'approved', 'staged', 'burning', 'burned') ORDER BY id DESC LIMIT 1"
@@ -216,6 +222,8 @@ def plan_disc(conn: sqlite3.Connection, settings: Settings) -> PlanResult:
                 (content_hash, disc_id, row["id"]),
             )
             progress_now = time.monotonic()
+            if progress_callback is not None:
+                progress_callback(disc_code, index, total_files)
             if _should_report_progress(index, total_files, last_report_at, progress_now):
                 logger.info(
                     "hash progress for %s: %d/%d files (%.1f%%)",
