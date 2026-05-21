@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +12,18 @@ from pathlib import Path
 from .config import Settings
 from .db import transaction
 from .hashing import hash_file
+
+logger = logging.getLogger(__name__)
+
+
+def _should_report_progress(index: int, total: int, last_report_at: float, now: float) -> bool:
+    if index == 1 or index == total:
+        return True
+    if index % 100 == 0:
+        return True
+    if now - last_report_at >= 2.0:
+        return True
+    return False
 
 
 @dataclass(slots=True)
@@ -88,6 +102,7 @@ def _write_disc_indexes(
                 "relative_path_on_disc",
                 "size_bytes",
                 "content_hash",
+                "source_folder",
             ]
         )
         for row in rows:
@@ -103,6 +118,7 @@ def _write_disc_indexes(
                     row["relative_path_on_disc"],
                     row["size_bytes"],
                     row["content_hash"],
+                    Path(row["source_root"]).name,
                 ]
             )
 
@@ -131,10 +147,12 @@ def _write_disc_indexes(
 
 
 def plan_disc(conn: sqlite3.Connection, settings: Settings) -> PlanResult:
+    logger.info("planning disc with limit=%d bytes", settings.planning_limit_bytes)
     already_planned = conn.execute(
         "SELECT disc_code, file_count, planned_bytes FROM discs WHERE status IN ('planned', 'approved', 'staged', 'burning', 'burned') ORDER BY id DESC LIMIT 1"
     ).fetchone()
     if already_planned is not None:
+        logger.info("existing active disc found: %s", already_planned["disc_code"])
         return PlanResult(
             disc_code=already_planned["disc_code"],
             file_count=already_planned["file_count"],
@@ -159,6 +177,7 @@ def plan_disc(conn: sqlite3.Connection, settings: Settings) -> PlanResult:
         total_bytes += row["size_bytes"]
 
     if not picked:
+        logger.info("no files available for planning")
         return PlanResult(disc_code=None, file_count=0, total_bytes=0)
 
     disc_code = _next_disc_code(conn)
@@ -176,7 +195,9 @@ def plan_disc(conn: sqlite3.Connection, settings: Settings) -> PlanResult:
             (disc_code, label, total_bytes, len(picked), date_from, date_to, now, now),
         )
         disc_id = cursor.lastrowid
-        for row in picked:
+        last_report_at = 0.0
+        total_files = len(picked)
+        for index, row in enumerate(picked, start=1):
             content_hash = hash_file(Path(row["absolute_path"]))
             relative_path_on_disc = _disc_relative_path(row["category"], row["media_date"], row["relative_path"])
             conn.execute(
@@ -194,8 +215,26 @@ def plan_disc(conn: sqlite3.Connection, settings: Settings) -> PlanResult:
                 """,
                 (content_hash, disc_id, row["id"]),
             )
+            progress_now = time.monotonic()
+            if _should_report_progress(index, total_files, last_report_at, progress_now):
+                logger.info(
+                    "hash progress for %s: %d/%d files (%.1f%%)",
+                    disc_code,
+                    index,
+                    total_files,
+                    (index / total_files) * 100,
+                )
+                last_report_at = progress_now
         _write_disc_indexes(conn, settings, disc_id, disc_code, label, date_from, date_to)
 
+    logger.info(
+        "planned disc %s with %d files and %d bytes, range %s..%s",
+        disc_code,
+        len(picked),
+        total_bytes,
+        date_from,
+        date_to,
+    )
     return PlanResult(disc_code=disc_code, file_count=len(picked), total_bytes=total_bytes)
 
 
@@ -213,4 +252,5 @@ def approve_disc(conn: sqlite3.Connection, disc_code: str) -> bool:
             "UPDATE files SET status = 'approved' WHERE disc_id = ? AND status = 'planned'",
             (row["id"],),
         )
+    logger.info("approved disc %s", disc_code)
     return True

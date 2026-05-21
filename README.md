@@ -10,6 +10,7 @@ Aktualny zakres MVP:
 - lokalne notyfikacje po `scan`, `approve`, `stage`, `burn` i `verify`
 - automatyczny mount plyty i `verify` zaraz po nagraniu
 - generowanie indeksu `CSV` i manifestu `JSON` dla kazdej planowanej plyty
+- logowanie do pliku z rotacja oraz na stdout
 - przygotowanie `staging/`, budowa ISO i nagrywanie przez `xorriso`
 - weryfikacja zawartosci po zamontowaniu plyty
 - prosty lokalny Web UI do podgladu kolejki i historii
@@ -44,11 +45,14 @@ ARCHIVER_AUTO_PLAN=true
 ARCHIVER_AUTO_VERIFY=true
 ARCHIVER_VERIFY_RETRY_COUNT=10
 ARCHIVER_VERIFY_RETRY_DELAY_SECONDS=6
+ARCHIVER_LOG_DIR=/home/piotr/sandbox/archiver/logs
+ARCHIVER_LOG_LEVEL=INFO
 ```
 
 `ARCHIVER_FILL_RATIO=0.93` oznacza planowanie paczek do 93 GiB netto dla plyty 100 GB.
 Przy `plan` powstaja pliki `manifests/DISC-XXXX.csv` i `manifests/DISC-XXXX.json`.
 CSV ma sluzyc jako prosty indeks do przeszukiwania po sciezkach i nazwach plikow.
+Na koncu kazdego wiersza CSV jest tez kolumna `source_folder`, czyli nazwa udzialu lub katalogu zrodlowego, np. `Public` albo `Kasia_priv`.
 Jesli `ARCHIVER_AUTO_PLAN=true`, tygodniowy skan sam zaplanuje nowa plyte po przekroczeniu progu.
 
 W przypadku NAS, ktory jest codziennie offline w nocy, ustaw skan poza oknem niedostepnosci:
@@ -175,6 +179,27 @@ Komenda dostaje dwa argumenty:
 
 ```text
 <title> <body>
+```
+
+## Logi
+
+Archiver loguje jednoczesnie:
+- do stdout
+- do pliku z rotacja
+
+Domyslnie plik logu jest tutaj:
+
+```text
+logs/archiver.log
+```
+
+Mozesz to zmienic przez:
+
+```bash
+ARCHIVER_LOG_DIR=/home/piotr/sandbox/archiver/logs
+ARCHIVER_LOG_LEVEL=INFO
+ARCHIVER_LOG_MAX_BYTES=10485760
+ARCHIVER_LOG_BACKUP_COUNT=5
 ```
 
 ## Mount NAS przez automount

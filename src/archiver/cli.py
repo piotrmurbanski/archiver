@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import uvicorn
@@ -8,11 +9,14 @@ import uvicorn
 from .burner import burn_disc, stage_disc, verify_disc
 from .config import load_settings
 from .db import connect, init_db
+from .logging_setup import configure_logging
 from .notifier import send_notification
 from .planner import approve_disc, plan_disc
 from .repository import active_disc, pending_bytes, status_summary
 from .scanner import root_is_available, scan_sources
 from .web import create_app
+
+logger = logging.getLogger(__name__)
 
 
 def _format_bytes(size: int) -> str:
@@ -52,6 +56,8 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     settings = load_settings()
+    configure_logging(settings)
+    logger.info("command started: %s", args.command)
     conn = connect(settings.db_path)
 
     if args.command == "init-db":

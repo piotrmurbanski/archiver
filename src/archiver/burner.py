@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 import sqlite3
 import subprocess
@@ -11,6 +12,8 @@ from pathlib import Path
 from .config import Settings
 from .db import transaction
 from .hashing import hash_file
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -88,6 +91,12 @@ def _ensure_staging_space(settings: Settings) -> None:
     usage = shutil.disk_usage(target_dir)
     required_bytes = settings.disc_size_bytes
     if usage.free < required_bytes:
+        logger.error(
+            "not enough free space for staging: required=%s available=%s path=%s",
+            _format_bytes(required_bytes),
+            _format_bytes(usage.free),
+            target_dir,
+        )
         raise RuntimeError(
             "Not enough free space for staging: "
             f"required at least {_format_bytes(required_bytes)}, "
@@ -99,6 +108,7 @@ def stage_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> 
     disc = _disc_row(conn, disc_code)
     files = _disc_files(conn, disc["id"])
     _ensure_staging_space(settings)
+    logger.info("staging disc %s with %d files", disc_code, len(files))
     stage_dir = settings.staging_dir / disc_code
     if stage_dir.exists():
         shutil.rmtree(stage_dir)
@@ -119,6 +129,7 @@ def stage_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> 
             "UPDATE files SET status = 'staged' WHERE disc_id = ? AND status IN ('planned', 'approved', 'staged')",
             (disc["id"],),
         )
+    logger.info("staging completed for %s at %s", disc_code, stage_dir)
     return StageResult(disc_code=disc_code, stage_dir=stage_dir, file_count=len(files))
 
 
@@ -157,6 +168,7 @@ def _mount_optical_disc(settings: Settings) -> Path:
     fallback_error: str | None = None
     udisksctl = shutil.which("udisksctl")
     if udisksctl is not None:
+        logger.info("attempting optical mount via udisksctl for %s", settings.optical_device)
         result = subprocess.run(
             [udisksctl, "mount", "-b", settings.optical_device, "--no-user-interaction"],
             check=False,
@@ -170,15 +182,18 @@ def _mount_optical_disc(settings: Settings) -> Path:
                 mount_candidate = text.split(marker, 1)[1].strip().rstrip(".")
                 mount_path = Path(mount_candidate)
                 if mount_path.exists():
+                    logger.info("disc mounted at %s", mount_path)
                     return mount_path
             mounted_path = _mounted_device_path(settings.optical_device)
             if mounted_path is not None:
+                logger.info("disc already mounted at %s", mounted_path)
                 return mounted_path
         else:
             error_text = ((result.stdout or "") + (result.stderr or "")).strip()
             if error_text and "already mounted" in error_text.lower():
                 mounted_path = _mounted_device_path(settings.optical_device)
                 if mounted_path is not None:
+                    logger.info("disc already mounted at %s", mounted_path)
                     return mounted_path
             elif error_text:
                 fallback_error = error_text
@@ -207,6 +222,7 @@ def _mount_optical_disc(settings: Settings) -> Path:
 
 
 def _unmount_optical_disc(settings: Settings, mount_path: Path) -> None:
+    logger.info("unmounting optical disc from %s", mount_path)
     udisksctl = shutil.which("udisksctl")
     if udisksctl is not None and settings.optical_device:
         subprocess.run(
@@ -226,11 +242,13 @@ def _attempt_auto_verify(conn: sqlite3.Connection, settings: Settings, disc_code
     for attempt in range(1, settings.verify_retry_count + 1):
         mount_path: Path | None = None
         try:
+            logger.info("auto-verify attempt %d/%d for %s", attempt, settings.verify_retry_count, disc_code)
             mount_path = _mount_optical_disc(settings)
             verify_disc(conn, settings, disc_code, mount_path=mount_path)
             return mount_path
         except Exception as exc:
             last_error = exc
+            logger.warning("auto-verify attempt %d failed for %s: %s", attempt, disc_code, exc)
         finally:
             if mount_path is not None:
                 _unmount_optical_disc(settings, mount_path)
@@ -249,6 +267,7 @@ def create_iso(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> 
     settings.iso_dir.mkdir(parents=True, exist_ok=True)
     iso_path = settings.iso_dir / f"{disc_code}.iso"
     xorriso = _require_xorriso()
+    logger.info("creating iso for %s at %s", disc_code, iso_path)
     subprocess.run(
         [
             xorriso,
@@ -275,6 +294,7 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
     iso_path = create_iso(conn, settings, disc_code)
     xorriso = _require_xorriso()
     now = datetime.now(UTC).isoformat()
+    logger.info("burn started for %s using device %s", disc_code, settings.optical_device)
     with transaction(conn):
         conn.execute("UPDATE discs SET status = 'burning', updated_at = ? WHERE id = ?", (now, disc["id"]))
         conn.execute("UPDATE files SET status = 'burning' WHERE disc_id = ?", (disc["id"],))
@@ -291,6 +311,7 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
             check=True,
         )
     except Exception:
+        logger.exception("burn failed for %s", disc_code)
         failed_at = datetime.now(UTC).isoformat()
         with transaction(conn):
             conn.execute("UPDATE discs SET status = 'burn_failed', updated_at = ? WHERE id = ?", (failed_at, disc["id"]))
@@ -300,6 +321,7 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
             )
         raise
     burned_at = datetime.now(UTC).isoformat()
+    logger.info("burn completed for %s", disc_code)
     with transaction(conn):
         conn.execute("UPDATE discs SET status = 'burned', updated_at = ? WHERE id = ?", (burned_at, disc["id"]))
         conn.execute("UPDATE files SET status = 'burned' WHERE disc_id = ?", (disc["id"],))
@@ -310,6 +332,7 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
             verify_mount = _attempt_auto_verify(conn, settings, disc_code)
             verified = True
             verify_error = None
+            logger.info("automatic verify completed for %s", disc_code)
         except Exception as exc:
             failed_at = datetime.now(UTC).isoformat()
             with transaction(conn):
@@ -318,6 +341,7 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
                     (failed_at, disc["id"]),
                 )
             verify_error = str(exc)
+            logger.warning("automatic verify failed for %s: %s", disc_code, exc)
     else:
         verify_error = None
     return BurnResult(
@@ -332,6 +356,7 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
 def verify_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str, mount_path: Path | None = None) -> VerifyResult:
     disc = _disc_row(conn, disc_code)
     verify_root = mount_path or settings.verify_mount
+    logger.info("verify started for %s using mount %s", disc_code, verify_root)
     if not verify_root.exists():
         raise RuntimeError(f"Verify mount not found: {verify_root}")
     files = _disc_files(conn, disc["id"])
@@ -358,4 +383,6 @@ def verify_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str, mo
     stage_dir = settings.staging_dir / disc_code
     if stage_dir.exists():
         shutil.rmtree(stage_dir)
+        logger.info("removed staging directory after verify: %s", stage_dir)
+    logger.info("verify completed for %s (%d files)", disc_code, len(files))
     return VerifyResult(disc_code=disc_code, checked_files=len(files))

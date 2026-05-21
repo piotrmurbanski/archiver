@@ -24,6 +24,7 @@ class Settings:
     manifests_dir: Path
     staging_dir: Path
     iso_dir: Path
+    log_dir: Path
     disc_size_bytes: int
     fill_ratio: float
     web_host: str
@@ -37,6 +38,9 @@ class Settings:
     auto_verify: bool
     verify_retry_count: int
     verify_retry_delay_seconds: int
+    log_level: str
+    log_max_bytes: int
+    log_backup_count: int
 
     @property
     def planning_limit_bytes(self) -> int:
@@ -51,6 +55,7 @@ def load_settings() -> Settings:
     manifests_dir = Path(os.environ.get("ARCHIVER_MANIFESTS_DIR", "./manifests")).expanduser()
     staging_dir = Path(os.environ.get("ARCHIVER_STAGING_DIR", "./staging")).expanduser()
     iso_dir = Path(os.environ.get("ARCHIVER_ISO_DIR", "./iso")).expanduser()
+    log_dir = Path(os.environ.get("ARCHIVER_LOG_DIR", "./logs")).expanduser()
     disc_size_gb = int(os.environ.get("ARCHIVER_DISC_SIZE_GB", "100"))
     fill_ratio = float(os.environ.get("ARCHIVER_FILL_RATIO", "0.93"))
     web_host = os.environ.get("ARCHIVER_WEB_HOST", "127.0.0.1")
@@ -64,12 +69,16 @@ def load_settings() -> Settings:
     auto_verify = os.environ.get("ARCHIVER_AUTO_VERIFY", "true").strip().lower() in {"1", "true", "yes", "on"}
     verify_retry_count = int(os.environ.get("ARCHIVER_VERIFY_RETRY_COUNT", "10"))
     verify_retry_delay_seconds = int(os.environ.get("ARCHIVER_VERIFY_RETRY_DELAY_SECONDS", "6"))
+    log_level = os.environ.get("ARCHIVER_LOG_LEVEL", "INFO").strip().upper()
+    log_max_bytes = int(os.environ.get("ARCHIVER_LOG_MAX_BYTES", "10485760"))
+    log_backup_count = int(os.environ.get("ARCHIVER_LOG_BACKUP_COUNT", "5"))
     return Settings(
         db_path=db_path,
         roots=roots,
         manifests_dir=manifests_dir,
         staging_dir=staging_dir,
         iso_dir=iso_dir,
+        log_dir=log_dir,
         disc_size_bytes=disc_size_gb * 1024**3,
         fill_ratio=fill_ratio,
         web_host=web_host,
@@ -83,4 +92,7 @@ def load_settings() -> Settings:
         auto_verify=auto_verify,
         verify_retry_count=verify_retry_count,
         verify_retry_delay_seconds=verify_retry_delay_seconds,
+        log_level=log_level,
+        log_max_bytes=log_max_bytes,
+        log_backup_count=log_backup_count,
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -8,6 +9,8 @@ from pathlib import Path
 
 from .config import Settings
 from .db import transaction
+
+logger = logging.getLogger(__name__)
 
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff", ".raw", ".cr2", ".nef", ".arw"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".mts", ".m2ts", ".3gp"}
@@ -61,14 +64,18 @@ def _fingerprint(size_bytes: int, mtime_ns: int) -> str:
 def scan_sources(conn: sqlite3.Connection, settings: Settings) -> ScanStats:
     stats = ScanStats()
     now = datetime.now(UTC).isoformat()
+    logger.info("scan started for %d roots", len(settings.roots))
     with transaction(conn):
         for root in settings.roots:
             if not root.exists():
                 stats.missing_roots += 1
+                logger.warning("scan skipped missing root: %s", root)
                 continue
             if not root_is_available(root):
                 stats.offline_roots += 1
+                logger.warning("scan skipped offline root: %s", root)
                 continue
+            logger.info("scanning root: %s", root)
             for path in root.rglob("*"):
                 if not path.is_file():
                     continue
@@ -76,6 +83,7 @@ def scan_sources(conn: sqlite3.Connection, settings: Settings) -> ScanStats:
                     stat_result = path.stat()
                 except OSError:
                     stats.skipped_files += 1
+                    logger.warning("could not stat file: %s", path)
                     continue
                 stats.scanned_files += 1
                 relative_path = path.relative_to(root).as_posix()
@@ -145,4 +153,14 @@ def scan_sources(conn: sqlite3.Connection, settings: Settings) -> ScanStats:
                     ),
                 )
                 stats.changed_files += 1
+    logger.info(
+        "scan completed: scanned=%d new=%d changed=%d unchanged=%d skipped=%d missing_roots=%d offline_roots=%d",
+        stats.scanned_files,
+        stats.new_files,
+        stats.changed_files,
+        stats.unchanged_files,
+        stats.skipped_files,
+        stats.missing_roots,
+        stats.offline_roots,
+    )
     return stats
