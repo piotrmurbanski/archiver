@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Archiver scan once per week
+
+[Timer]
+OnCalendar=Sun 10:00
+Persistent=true
+Unit=archiver-scan.service
+
+[Install]
+WantedBy=timers.target

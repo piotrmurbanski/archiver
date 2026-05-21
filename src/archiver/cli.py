@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import uvicorn
+
+from .burner import burn_disc, stage_disc, verify_disc
+from .config import load_settings
+from .db import connect, init_db
+from .planner import approve_disc, plan_disc
+from .repository import status_summary
+from .scanner import root_is_available, scan_sources
+from .web import create_app
+
+
+def _format_bytes(size: int) -> str:
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{value:.2f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="archiver")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("init-db")
+    subparsers.add_parser("scan")
+    subparsers.add_parser("status")
+    subparsers.add_parser("plan")
+    stage = subparsers.add_parser("stage")
+    stage.add_argument("disc_code")
+    burn = subparsers.add_parser("burn")
+    burn.add_argument("disc_code")
+    verify = subparsers.add_parser("verify")
+    verify.add_argument("disc_code")
+    verify.add_argument("--mount-path", default=None)
+
+    approve = subparsers.add_parser("approve")
+    approve.add_argument("disc_code")
+
+    subparsers.add_parser("web")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    settings = load_settings()
+    conn = connect(settings.db_path)
+
+    if args.command == "init-db":
+        init_db(conn)
+        print(f"Initialized database at {settings.db_path}")
+        return
+
+    init_db(conn)
+
+    if args.command == "scan":
+        unavailable_roots = [str(root) for root in settings.roots if not root_is_available(root)]
+        if unavailable_roots:
+            print("scan skipped: NAS root unavailable")
+            for root in unavailable_roots:
+                print(f"  offline: {root}")
+            return
+        stats = scan_sources(conn, settings)
+        print(
+            "scan completed:",
+            f"scanned={stats.scanned_files}",
+            f"new={stats.new_files}",
+            f"changed={stats.changed_files}",
+            f"unchanged={stats.unchanged_files}",
+            f"missing_roots={stats.missing_roots}",
+            f"skipped={stats.skipped_files}",
+            f"offline_roots={stats.offline_roots}",
+        )
+        return
+
+    if args.command == "status":
+        summary = status_summary(conn)
+        print("File counts by status:")
+        for status, count in sorted(summary["counts"].items()):
+            print(f"  {status}: {count}")
+        print(f"Pending bytes: {_format_bytes(int(summary['pending_bytes']))}")
+        planned_disc = summary["planned_disc"]
+        if planned_disc is None:
+            print("No planned disc.")
+        else:
+            print(
+                f"Planned disc: {planned_disc['disc_code']} "
+                f"({planned_disc['status']}, {_format_bytes(planned_disc['planned_bytes'])}, "
+                f"{planned_disc['file_count']} files)"
+            )
+        return
+
+    if args.command == "plan":
+        result = plan_disc(conn, settings)
+        if result.disc_code is None:
+            print("No files available for planning.")
+            return
+        print(
+            f"Planned {result.disc_code}: "
+            f"{result.file_count} files, {_format_bytes(result.total_bytes)}"
+        )
+        return
+
+    if args.command == "approve":
+        ok = approve_disc(conn, args.disc_code)
+        if not ok:
+            raise SystemExit(f"Disc not found: {args.disc_code}")
+        print(f"Approved {args.disc_code}")
+        return
+
+    if args.command == "stage":
+        result = stage_disc(conn, settings, args.disc_code)
+        print(f"Staged {result.disc_code} at {result.stage_dir} ({result.file_count} files)")
+        return
+
+    if args.command == "burn":
+        result = burn_disc(conn, settings, args.disc_code)
+        print(f"Burned {result.disc_code} from {result.iso_path}")
+        return
+
+    if args.command == "verify":
+        mount_path = Path(args.mount_path) if args.mount_path else None
+        result = verify_disc(conn, settings, args.disc_code, mount_path=mount_path)
+        print(f"Verified {result.disc_code}: {result.checked_files} files")
+        return
+
+    if args.command == "web":
+        app = create_app(conn, settings)
+        uvicorn.run(app, host=settings.web_host, port=settings.web_port)
+        return
+
+    parser.error("Unknown command")
+
+
+if __name__ == "__main__":
+    main()

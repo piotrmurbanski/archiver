@@ -1,0 +1,13 @@
+[Unit]
+Description=Archiver local web interface
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/piotr/sandbox/archiver
+EnvironmentFile=/home/piotr/sandbox/archiver/.env
+ExecStart=/home/piotr/sandbox/archiver/.venv/bin/archiver web
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

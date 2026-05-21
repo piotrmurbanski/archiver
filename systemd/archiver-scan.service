@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly Archiver scan for NAS content
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/piotr/sandbox/archiver
+EnvironmentFile=/home/piotr/sandbox/archiver/.env
+ExecStart=/home/piotr/sandbox/archiver/.venv/bin/archiver scan
