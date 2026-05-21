@@ -16,6 +16,20 @@ from .hashing import hash_file
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[str, int, int], None]
+RAW_EXTENSIONS = {".raw", ".cr2", ".nef", ".arw"}
+
+
+def _archive_kind_for(path_value: str, category: str) -> str:
+    ext = Path(path_value).suffix.lower()
+    if category == "document":
+        return "doc"
+    if category == "video":
+        return "movie"
+    if category == "photo":
+        if ext in RAW_EXTENSIONS:
+            return "raw"
+        return "pic"
+    return "other"
 
 
 def _should_report_progress(index: int, total: int, last_report_at: float, now: float) -> bool:
@@ -105,9 +119,11 @@ def _write_disc_indexes(
                 "size_bytes",
                 "content_hash",
                 "source_folder",
+                "archive_kind",
             ]
         )
         for row in rows:
+            archive_kind = _archive_kind_for(row["relative_path"], row["category"])
             writer.writerow(
                 [
                     disc_code,
@@ -121,6 +137,7 @@ def _write_disc_indexes(
                     row["size_bytes"],
                     row["content_hash"],
                     Path(row["source_root"]).name,
+                    archive_kind,
                 ]
             )
 
@@ -141,6 +158,7 @@ def _write_disc_indexes(
                 "relative_path_on_disc": row["relative_path_on_disc"],
                 "size_bytes": row["size_bytes"],
                 "content_hash": row["content_hash"],
+                "archive_kind": _archive_kind_for(row["relative_path"], row["category"]),
             }
             for row in rows
         ],

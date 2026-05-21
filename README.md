@@ -53,6 +53,7 @@ ARCHIVER_LOG_LEVEL=INFO
 Przy `plan` powstaja pliki `manifests/DISC-XXXX.csv` i `manifests/DISC-XXXX.json`.
 CSV ma sluzyc jako prosty indeks do przeszukiwania po sciezkach i nazwach plikow.
 Na koncu kazdego wiersza CSV jest tez kolumna `source_folder`, czyli nazwa udzialu lub katalogu zrodlowego, np. `Public` albo `Kasia_priv`.
+CSV ma tez kolumne `archive_kind` z uproszczonym typem pliku: `doc`, `movie`, `pic`, `raw`.
 Jesli `ARCHIVER_AUTO_PLAN=true`, tygodniowy skan sam zaplanuje nowa plyte po przekroczeniu progu.
 
 W przypadku NAS, ktory jest codziennie offline w nocy, ustaw skan poza oknem niedostepnosci:
