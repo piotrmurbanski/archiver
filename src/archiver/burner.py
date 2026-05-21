@@ -85,6 +85,17 @@ def _copy_file(src: Path, dest: Path) -> None:
     shutil.copy2(src, dest)
 
 
+def _count_staged_payload_files(stage_dir: Path) -> int:
+    count = 0
+    for path in stage_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        if "index" in path.parts:
+            continue
+        count += 1
+    return count
+
+
 def _ensure_staging_space(settings: Settings) -> None:
     target_dir = settings.staging_dir.parent
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +133,19 @@ def stage_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> 
     _copy_file(settings.manifests_dir / f"{disc_code}.csv", index_dir / f"{disc_code}.csv")
     _copy_file(settings.manifests_dir / f"{disc_code}.json", index_dir / f"{disc_code}.json")
 
+    staged_file_count = _count_staged_payload_files(stage_dir)
+    if staged_file_count != len(files):
+        logger.error(
+            "staging file count mismatch for %s: expected=%d actual=%d",
+            disc_code,
+            len(files),
+            staged_file_count,
+        )
+        raise RuntimeError(
+            f"Staging verification failed for {disc_code}: expected {len(files)} files, "
+            f"found {staged_file_count} copied files"
+        )
+
     now = datetime.now(UTC).isoformat()
     with transaction(conn):
         conn.execute("UPDATE discs SET status = 'staged', updated_at = ? WHERE id = ?", (now, disc["id"]))
@@ -129,7 +153,13 @@ def stage_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> 
             "UPDATE files SET status = 'staged' WHERE disc_id = ? AND status IN ('planned', 'approved', 'staged')",
             (disc["id"],),
         )
-    logger.info("staging completed for %s at %s", disc_code, stage_dir)
+    logger.info(
+        "staging completed for %s at %s (%d/%d files verified)",
+        disc_code,
+        stage_dir,
+        staged_file_count,
+        len(files),
+    )
     return StageResult(disc_code=disc_code, stage_dir=stage_dir, file_count=len(files))
 
 

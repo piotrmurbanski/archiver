@@ -159,6 +159,7 @@ W tej wersji `stage` kopiuje pliki do katalogu roboczego i doklada na plyte:
 ```
 
 Przed rozpoczeciem `stage` narzedzie sprawdza, czy na dysku pod katalogiem staging jest co najmniej tyle wolnego miejsca, ile wynosi pojemnosc plyty z `ARCHIVER_DISC_SIZE_GB`. Jesli miejsca jest za malo, proces przerywa sie przed kopiowaniem plikow.
+Po zakonczeniu `stage` narzedzie sprawdza tez, czy liczba skopiowanych plikow zgadza sie z planem plyty, zanim uzna staging za poprawny.
 
 Do `burn` potrzebny jest `xorriso` oraz ustawienie:
 
