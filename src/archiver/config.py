@@ -34,6 +34,9 @@ class Settings:
     verify_mount: Path
     auto_plan: bool
     notify_command: str | None
+    auto_verify: bool
+    verify_retry_count: int
+    verify_retry_delay_seconds: int
 
     @property
     def planning_limit_bytes(self) -> int:
@@ -58,6 +61,9 @@ def load_settings() -> Settings:
     verify_mount = Path(os.environ.get("ARCHIVER_VERIFY_MOUNT", "/mnt/archiver-disc")).expanduser()
     auto_plan = os.environ.get("ARCHIVER_AUTO_PLAN", "true").strip().lower() in {"1", "true", "yes", "on"}
     notify_command = os.environ.get("ARCHIVER_NOTIFY_COMMAND") or None
+    auto_verify = os.environ.get("ARCHIVER_AUTO_VERIFY", "true").strip().lower() in {"1", "true", "yes", "on"}
+    verify_retry_count = int(os.environ.get("ARCHIVER_VERIFY_RETRY_COUNT", "10"))
+    verify_retry_delay_seconds = int(os.environ.get("ARCHIVER_VERIFY_RETRY_DELAY_SECONDS", "6"))
     return Settings(
         db_path=db_path,
         roots=roots,
@@ -74,4 +80,7 @@ def load_settings() -> Settings:
         verify_mount=verify_mount,
         auto_plan=auto_plan,
         notify_command=notify_command,
+        auto_verify=auto_verify,
+        verify_retry_count=verify_retry_count,
+        verify_retry_delay_seconds=verify_retry_delay_seconds,
     )

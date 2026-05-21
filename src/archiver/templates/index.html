@@ -210,6 +210,12 @@
               <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
               <button type="submit">Nagraj plyte</button>
             </form>
+          {% elif summary.planned_disc["status"] in ["burned", "verify_failed"] %}
+            <p class="warn">
+              Automatyczny verify nie zakonczyl jeszcze procesu.
+              W razie potrzeby uruchom recznie:
+              <code>archiver verify {{ summary.planned_disc["disc_code"] }} --mount-path /mnt/archiver-disc</code>
+            </p>
           {% endif %}
         {% else %}
           <p class="muted">Brak aktualnie zaplanowanej plyty.</p>
@@ -270,7 +276,7 @@
         {% else %}
           <p class="muted">Brak plikow w kolejce.</p>
         {% endif %}
-        <p class="warn">Po nagraniu uruchom `archiver verify DISC-XXXX --mount-path /mnt/archiver-disc`, zeby oznaczyc pliki jako `verified`.</p>
+        <p class="warn">Domyslnie `burn` sam probuje zamontowac plyte i uruchomic `verify`. Reczny `archiver verify` jest potrzebny tylko wtedy, gdy naped nie udostepnil plyty do odczytu albo verify sie nie udal.</p>
       </section>
     </main>
   </body>

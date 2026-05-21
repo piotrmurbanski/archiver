@@ -136,8 +136,14 @@ def main() -> None:
 
     if args.command == "burn":
         result = burn_disc(conn, settings, args.disc_code)
-        send_notification(settings, "Archiver: burn complete", f"{result.disc_code} burned, run verify")
-        print(f"Burned {result.disc_code} from {result.iso_path}")
+        if result.verified:
+            send_notification(settings, "Archiver: burn and verify complete", f"{result.disc_code} verified successfully")
+            print(f"Burned and verified {result.disc_code} from {result.iso_path}")
+        else:
+            send_notification(settings, "Archiver: burn complete", f"{result.disc_code} burned; verify pending")
+            print(f"Burned {result.disc_code} from {result.iso_path}")
+            if settings.auto_verify:
+                print(f"Automatic verify did not complete: {result.verify_error or 'unknown reason'}")
         return
 
     if args.command == "verify":

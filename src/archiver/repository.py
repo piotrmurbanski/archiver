@@ -15,7 +15,7 @@ def active_disc(conn: sqlite3.Connection):
         """
         SELECT disc_code, label, status, planned_bytes, file_count, date_from, date_to, approved_at
         FROM discs
-        WHERE status IN ('planned', 'approved', 'staged', 'burning', 'burned')
+        WHERE status IN ('planned', 'approved', 'staged', 'burning', 'burned', 'verify_failed')
         ORDER BY id DESC
         LIMIT 1
         """

@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import sqlite3
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,9 @@ class StageResult:
 class BurnResult:
     disc_code: str
     iso_path: Path
+    verified: bool
+    verify_mount: Path | None
+    verify_error: str | None
 
 
 @dataclass(slots=True)
@@ -125,6 +129,118 @@ def _require_xorriso() -> str:
     return binary
 
 
+def _mounted_device_path(device: str) -> Path | None:
+    lsblk = shutil.which("lsblk")
+    if lsblk is None:
+        return None
+    result = subprocess.run(
+        [lsblk, "-n", "-o", "MOUNTPOINT", device],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        mountpoint = line.strip()
+        if mountpoint:
+            path = Path(mountpoint)
+            if path.exists():
+                return path
+    return None
+
+
+def _mount_optical_disc(settings: Settings) -> Path:
+    if not settings.optical_device:
+        raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
+
+    fallback_error: str | None = None
+    udisksctl = shutil.which("udisksctl")
+    if udisksctl is not None:
+        result = subprocess.run(
+            [udisksctl, "mount", "-b", settings.optical_device, "--no-user-interaction"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            text = (result.stdout or "") + (result.stderr or "")
+            marker = " at "
+            if marker in text:
+                mount_candidate = text.split(marker, 1)[1].strip().rstrip(".")
+                mount_path = Path(mount_candidate)
+                if mount_path.exists():
+                    return mount_path
+            mounted_path = _mounted_device_path(settings.optical_device)
+            if mounted_path is not None:
+                return mounted_path
+        else:
+            error_text = ((result.stdout or "") + (result.stderr or "")).strip()
+            if error_text and "already mounted" in error_text.lower():
+                mounted_path = _mounted_device_path(settings.optical_device)
+                if mounted_path is not None:
+                    return mounted_path
+            elif error_text:
+                fallback_error = error_text
+
+    mount_binary = shutil.which("mount")
+    if mount_binary is None:
+        if fallback_error:
+            raise RuntimeError(f"Unable to auto-mount disc: {fallback_error}")
+        raise RuntimeError("Unable to auto-mount disc: no supported mount tool found")
+
+    settings.verify_mount.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [mount_binary, "-o", "ro", settings.optical_device, str(settings.verify_mount)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        error_text = ((result.stdout or "") + (result.stderr or "")).strip()
+        if fallback_error and error_text:
+            raise RuntimeError(f"Unable to auto-mount disc: {fallback_error}; fallback mount failed: {error_text}")
+        if fallback_error:
+            raise RuntimeError(f"Unable to auto-mount disc: {fallback_error}")
+        raise RuntimeError(f"Unable to auto-mount disc: {error_text}")
+    return settings.verify_mount
+
+
+def _unmount_optical_disc(settings: Settings, mount_path: Path) -> None:
+    udisksctl = shutil.which("udisksctl")
+    if udisksctl is not None and settings.optical_device:
+        subprocess.run(
+            [udisksctl, "unmount", "-b", settings.optical_device, "--no-user-interaction"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return
+    umount_binary = shutil.which("umount")
+    if umount_binary is not None:
+        subprocess.run([umount_binary, str(mount_path)], check=False, capture_output=True, text=True)
+
+
+def _attempt_auto_verify(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> Path | None:
+    last_error: Exception | None = None
+    for attempt in range(1, settings.verify_retry_count + 1):
+        mount_path: Path | None = None
+        try:
+            mount_path = _mount_optical_disc(settings)
+            verify_disc(conn, settings, disc_code, mount_path=mount_path)
+            return mount_path
+        except Exception as exc:
+            last_error = exc
+        finally:
+            if mount_path is not None:
+                _unmount_optical_disc(settings, mount_path)
+        if attempt < settings.verify_retry_count:
+            time.sleep(settings.verify_retry_delay_seconds)
+    if last_error is not None:
+        raise RuntimeError(f"Automatic verify failed: {last_error}") from last_error
+    return None
+
+
 def create_iso(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> Path:
     _disc_row(conn, disc_code)
     stage_dir = settings.staging_dir / disc_code
@@ -187,7 +303,30 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
     with transaction(conn):
         conn.execute("UPDATE discs SET status = 'burned', updated_at = ? WHERE id = ?", (burned_at, disc["id"]))
         conn.execute("UPDATE files SET status = 'burned' WHERE disc_id = ?", (disc["id"],))
-    return BurnResult(disc_code=disc_code, iso_path=iso_path)
+    verified = False
+    verify_mount = None
+    if settings.auto_verify:
+        try:
+            verify_mount = _attempt_auto_verify(conn, settings, disc_code)
+            verified = True
+            verify_error = None
+        except Exception as exc:
+            failed_at = datetime.now(UTC).isoformat()
+            with transaction(conn):
+                conn.execute(
+                    "UPDATE discs SET status = 'verify_failed', updated_at = ? WHERE id = ?",
+                    (failed_at, disc["id"]),
+                )
+            verify_error = str(exc)
+    else:
+        verify_error = None
+    return BurnResult(
+        disc_code=disc_code,
+        iso_path=iso_path,
+        verified=verified,
+        verify_mount=verify_mount,
+        verify_error=verify_error,
+    )
 
 
 def verify_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str, mount_path: Path | None = None) -> VerifyResult:

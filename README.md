@@ -8,6 +8,7 @@ Aktualny zakres MVP:
 - planowanie kolejnej plyty wedlug limitu pojemnosci
 - automatyczne planowanie plyty po przekroczeniu progu pojemnosci
 - lokalne notyfikacje po `scan`, `approve`, `stage`, `burn` i `verify`
+- automatyczny mount plyty i `verify` zaraz po nagraniu
 - generowanie indeksu `CSV` i manifestu `JSON` dla kazdej planowanej plyty
 - przygotowanie `staging/`, budowa ISO i nagrywanie przez `xorriso`
 - weryfikacja zawartosci po zamontowaniu plyty
@@ -37,9 +38,12 @@ ARCHIVER_ROOTS=/mnt/NASz
 ARCHIVER_MANIFESTS_DIR=/home/piotr/sandbox/archiver/manifests
 ARCHIVER_DISC_SIZE_GB=100
 ARCHIVER_FILL_RATIO=0.93
-ARCHIVER_WEB_HOST=127.0.0.1
+ARCHIVER_WEB_HOST=0.0.0.0
 ARCHIVER_WEB_PORT=8765
 ARCHIVER_AUTO_PLAN=true
+ARCHIVER_AUTO_VERIFY=true
+ARCHIVER_VERIFY_RETRY_COUNT=10
+ARCHIVER_VERIFY_RETRY_DELAY_SECONDS=6
 ```
 
 `ARCHIVER_FILL_RATIO=0.93` oznacza planowanie paczek do 93 GiB netto dla plyty 100 GB.
@@ -106,6 +110,8 @@ Po zaplanowaniu i zatwierdzeniu plyty workflow jest taki:
 scan -> plan -> approve -> stage -> burn -> verify
 ```
 
+W praktyce `burn` domyslnie probuje od razu wykonac `verify` automatycznie. Osobny krok `verify` zostaje jako fallback, jesli naped nie wystawi plyty do odczytu od razu.
+
 Przygotowanie stagingu:
 
 ```bash
@@ -123,6 +129,8 @@ Weryfikacja po zamontowaniu plyty:
 ```bash
 archiver verify DISC-0001 --mount-path /mnt/archiver-disc
 ```
+
+Automatyczny verify po `burn` wykonuje do `ARCHIVER_VERIFY_RETRY_COUNT` prob mountowania plyty, z opoznieniem `ARCHIVER_VERIFY_RETRY_DELAY_SECONDS` sekund miedzy probami.
 
 W tej wersji `stage` kopiuje pliki do katalogu roboczego i doklada na plyte:
 
@@ -147,6 +155,7 @@ ARCHIVER_ISO_DIR=/home/piotr/sandbox/archiver/iso
 
 `verify` oznacza pliki jako `verified` dopiero po zgodnosci hashy z zawartoscia plyty.
 Po udanym `verify` katalog `staging/DISC-XXXX/` jest automatycznie usuwany.
+Jesli automatyczny verify po `burn` sie nie powiedzie, plyta dostaje status `verify_failed` i mozna powtorzyc tylko sam krok verify.
 
 ## Notyfikacje
 
