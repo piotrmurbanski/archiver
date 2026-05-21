@@ -144,6 +144,7 @@ ARCHIVER_ISO_DIR=/home/piotr/sandbox/archiver/iso
 ```
 
 `verify` oznacza pliki jako `verified` dopiero po zgodnosci hashy z zawartoscia plyty.
+Po udanym `verify` katalog `staging/DISC-XXXX/` jest automatycznie usuwany.
 
 ## Notyfikacje
 

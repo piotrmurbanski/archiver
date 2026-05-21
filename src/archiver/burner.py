@@ -192,4 +192,7 @@ def verify_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str, mo
             "UPDATE files SET status = 'verified', archived_at = ?, changed_after_archive = 0 WHERE disc_id = ?",
             (now, disc["id"]),
         )
+    stage_dir = settings.staging_dir / disc_code
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
     return VerifyResult(disc_code=disc_code, checked_files=len(files))
