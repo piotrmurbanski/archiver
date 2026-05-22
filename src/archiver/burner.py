@@ -180,6 +180,20 @@ def _require_xorriso() -> str:
     return binary
 
 
+def _require_growisofs() -> str:
+    binary = shutil.which("growisofs")
+    if binary is None:
+        raise RuntimeError("growisofs is required for optical burn workflow")
+    return binary
+
+
+def _log_subprocess_output(prefix: str, result: subprocess.CompletedProcess[str]) -> None:
+    if result.stdout:
+        logger.info("%s stdout:\n%s", prefix, result.stdout.strip())
+    if result.stderr:
+        logger.info("%s stderr:\n%s", prefix, result.stderr.strip())
+
+
 def _mounted_device_path(device: str) -> Path | None:
     lsblk = shutil.which("lsblk")
     if lsblk is None:
@@ -332,34 +346,37 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
     if not settings.optical_device:
         raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
     iso_path = create_iso(conn, settings, disc_code)
-    xorriso = _require_xorriso()
+    growisofs = _require_growisofs()
     now = datetime.now(UTC).isoformat()
     logger.info("burn started for %s using device %s", disc_code, settings.optical_device)
     with transaction(conn):
         conn.execute("UPDATE discs SET status = 'burning', updated_at = ? WHERE id = ?", (now, disc["id"]))
         conn.execute("UPDATE files SET status = 'burning' WHERE disc_id = ?", (disc["id"],))
     try:
-        subprocess.run(
+        result = subprocess.run(
             [
-                xorriso,
-                "-as",
-                "cdrecord",
-                f"dev={settings.optical_device}",
-                "-v",
-                str(iso_path),
+                growisofs,
+                "-dvd-compat",
+                "-Z",
+                f"{settings.optical_device}={iso_path}",
             ],
+            capture_output=True,
+            text=True,
             check=True,
         )
-    except Exception:
+        _log_subprocess_output(f"growisofs burn for {disc_code}", result)
+    except subprocess.CalledProcessError as exc:
+        _log_subprocess_output(f"growisofs burn for {disc_code}", exc)
         logger.exception("burn failed for %s", disc_code)
         failed_at = datetime.now(UTC).isoformat()
         with transaction(conn):
             conn.execute("UPDATE discs SET status = 'burn_failed', updated_at = ? WHERE id = ?", (failed_at, disc["id"]))
             conn.execute(
-                "UPDATE files SET status = 'approved' WHERE disc_id = ? AND status = 'burning'",
+                "UPDATE files SET status = 'staged' WHERE disc_id = ? AND status = 'burning'",
                 (disc["id"],),
             )
-        raise
+        error_text = ((exc.stdout or "") + "\n" + (exc.stderr or "")).strip()
+        raise RuntimeError(f"growisofs failed for {disc_code}: {error_text or exc}") from exc
     burned_at = datetime.now(UTC).isoformat()
     logger.info("burn completed for %s", disc_code)
     with transaction(conn):

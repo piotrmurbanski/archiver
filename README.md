@@ -11,7 +11,7 @@ Aktualny zakres MVP:
 - automatyczny mount plyty i `verify` zaraz po nagraniu
 - generowanie indeksu `CSV` i manifestu `JSON` dla kazdej planowanej plyty
 - logowanie do pliku z rotacja oraz na stdout
-- przygotowanie `staging/`, budowa ISO i nagrywanie przez `xorriso`
+- przygotowanie `staging/`, budowa ISO przez `xorriso` i nagrywanie przez `growisofs`
 - weryfikacja zawartosci po zamontowaniu plyty
 - prosty lokalny Web UI do podgladu kolejki i historii
 
@@ -167,10 +167,12 @@ W tej wersji `stage` kopiuje pliki do katalogu roboczego i doklada na plyte:
 ```text
 /index/DISC-0001.csv
 /index/DISC-0001.json
-/photos/YYYY/MM/...
-/videos/YYYY/MM/...
-/doc/YYYY/MM/...
+/photos/YYYY/MM/<source_folder>/...
+/videos/YYYY/MM/<source_folder>/...
+/doc/YYYY/MM/<source_folder>/...
 ```
+
+Pod struktura roku i miesiaca zachowywany jest tez zrodlowy udzial oraz oryginalna sciezka wzgledna pliku. To zapobiega kolizjom nazw typu dwa rozne pliki `_DSC0001.NEF` w tym samym miesiacu.
 
 Przed rozpoczeciem `stage` narzedzie sprawdza, czy na dysku pod katalogiem staging jest co najmniej tyle wolnego miejsca, ile wynosi pojemnosc plyty z `ARCHIVER_DISC_SIZE_GB`. Jesli miejsca jest za malo, proces przerywa sie przed kopiowaniem plikow.
 Po zakonczeniu `stage` narzedzie sprawdza tez, czy liczba skopiowanych plikow zgadza sie z planem plyty, zanim uzna staging za poprawny.

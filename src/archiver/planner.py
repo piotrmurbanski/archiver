@@ -58,7 +58,7 @@ def _disc_label(date_from: str, date_to: str) -> str:
     return f"archive {date_from[:7]}..{date_to[:7]}"
 
 
-def _disc_relative_path(category: str, media_date: str, relative_path: str) -> str:
+def _disc_relative_path(category: str, media_date: str, source_root: str, relative_path: str) -> str:
     year = media_date[:4]
     month = media_date[5:7]
     if category == "photo":
@@ -70,7 +70,8 @@ def _disc_relative_path(category: str, media_date: str, relative_path: str) -> s
     else:
         prefix = "other"
     bucket = f"{prefix}/{year}/{month}"
-    return f"{bucket}/{Path(relative_path).name}"
+    source_folder = Path(source_root).name
+    return f"{bucket}/{source_folder}/{relative_path}"
 
 
 def _write_disc_indexes(
@@ -179,7 +180,7 @@ def plan_disc(
 
     rows = conn.execute(
         """
-        SELECT id, absolute_path, relative_path, size_bytes, category, media_date
+        SELECT id, source_root, absolute_path, relative_path, size_bytes, category, media_date
         FROM files
         WHERE status IN ('new', 'changed_after_archive')
         ORDER BY media_date ASC, relative_path ASC
@@ -215,9 +216,21 @@ def plan_disc(
         disc_id = cursor.lastrowid
         last_report_at = 0.0
         total_files = len(picked)
+        seen_disc_paths: set[str] = set()
         for index, row in enumerate(picked, start=1):
             content_hash = hash_file(Path(row["absolute_path"]))
-            relative_path_on_disc = _disc_relative_path(row["category"], row["media_date"], row["relative_path"])
+            relative_path_on_disc = _disc_relative_path(
+                row["category"],
+                row["media_date"],
+                row["source_root"],
+                row["relative_path"],
+            )
+            if relative_path_on_disc in seen_disc_paths:
+                raise RuntimeError(
+                    f"Duplicate archive path detected for {disc_code}: {relative_path_on_disc}. "
+                    "Replanning aborted to avoid overwriting files on disc."
+                )
+            seen_disc_paths.add(relative_path_on_disc)
             conn.execute(
                 """
                 INSERT INTO disc_files (disc_id, file_id, relative_path_on_disc, content_hash, size_bytes)

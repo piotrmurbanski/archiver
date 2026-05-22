@@ -203,10 +203,10 @@
                   <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
                   <button type="submit" class="secondary">Stage</button>
                 </form>
-              {% elif summary.planned_disc["status"] == "staged" %}
+              {% elif summary.planned_disc["status"] in ["staged", "burn_failed"] %}
                 <form method="post" action="/burn">
                   <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
-                  <button type="submit">Nagraj</button>
+                  <button type="submit">{{ "Nagraj ponownie" if summary.planned_disc["status"] == "burn_failed" else "Nagraj" }}</button>
                 </form>
               {% elif summary.planned_disc["status"] in ["burned", "verify_failed"] %}
                 <p class="warn">
