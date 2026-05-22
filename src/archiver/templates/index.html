@@ -25,46 +25,53 @@
           linear-gradient(180deg, #f7f2e9 0%, #eee5d6 100%);
       }
       main {
-        max-width: 1200px;
+        max-width: 1180px;
         margin: 0 auto;
-        padding: 32px 20px 64px;
+        padding: 28px 18px 64px;
       }
-      h1, h2 { margin: 0 0 12px; }
-      h1 {
-        font-size: 2.5rem;
-        letter-spacing: 0.02em;
-      }
+      h1, h2, h3 { margin: 0 0 10px; }
+      h1 { font-size: 2.3rem; letter-spacing: 0.02em; }
       .subtitle {
         color: var(--muted);
-        margin-bottom: 28px;
+        margin-bottom: 20px;
       }
       .grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px;
+      }
+      .two-col {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
         gap: 16px;
-        margin-bottom: 24px;
+      }
+      .stack {
+        display: grid;
+        gap: 16px;
       }
       .card {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 18px;
-        padding: 18px;
+        padding: 16px;
         box-shadow: 0 12px 30px rgba(43, 37, 22, 0.07);
       }
       .metric {
-        font-size: 2rem;
-        margin-top: 8px;
+        font-size: 1.8rem;
+        margin-top: 6px;
       }
+      .muted { color: var(--muted); }
+      .warn { color: var(--warn); }
       .actions {
         display: flex;
         flex-wrap: wrap;
-        gap: 12px;
-        margin: 18px 0 28px;
+        gap: 10px;
+        margin-top: 12px;
       }
       button {
         border: 0;
         border-radius: 999px;
-        padding: 12px 18px;
+        padding: 11px 16px;
         background: var(--accent);
         color: white;
         font: inherit;
@@ -80,23 +87,35 @@
       }
       th, td {
         text-align: left;
-        padding: 10px 8px;
+        padding: 9px 8px;
         border-bottom: 1px solid var(--line);
         vertical-align: top;
       }
-      .planned {
-        border-left: 6px solid var(--accent);
-      }
-      .muted { color: var(--muted); }
-      .warn { color: var(--warn); }
       code {
         background: rgba(13, 107, 89, 0.08);
         padding: 0.1rem 0.35rem;
         border-radius: 6px;
       }
+      details summary {
+        cursor: pointer;
+        color: var(--muted);
+      }
+      .progress-big {
+        font-size: 2rem;
+        margin: 6px 0;
+      }
+      .section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      @media (max-width: 860px) {
+        .two-col { grid-template-columns: 1fr; }
+      }
       @media (max-width: 720px) {
         h1 { font-size: 2rem; }
-        main { padding: 20px 14px 48px; }
+        main { padding: 18px 12px 48px; }
       }
     </style>
   </head>
@@ -104,25 +123,11 @@
     <main>
       <h1>Archiver</h1>
       <p class="subtitle">
-        Tygodniowy skan NAS, planowanie partii na M-Disc i lokalny podglad kolejki.
-        Limit planowania: <code>{{ (settings.planning_limit_bytes / 1024 / 1024 / 1024) | round(2) }} GiB</code>
-        {% if settings.auto_plan %}
-          Auto-plan: <code>wlaczony</code>
-        {% else %}
-          Auto-plan: <code>wylaczony</code>
-        {% endif %}
+        Archiwizacja na M-Disc. Limit planowania:
+        <code>{{ (settings.planning_limit_bytes / 1024 / 1024 / 1024) | round(2) }} GiB</code>
       </p>
 
-      <section class="grid">
-        {% for root, available in root_checks %}
-          <article class="card">
-            <div class="muted">NAS mount</div>
-            <div class="metric" style="font-size: 1.2rem;">{{ root }}</div>
-            <div class="{{ 'muted' if available else 'warn' }}">
-              {{ 'online' if available else 'offline' }}
-            </div>
-          </article>
-        {% endfor %}
+      <section class="grid" style="margin-bottom: 16px;">
         <article class="card">
           <div class="muted">Do archiwizacji</div>
           <div class="metric">{{ (summary.pending_bytes / 1024 / 1024 / 1024) | round(2) }} GiB</div>
@@ -145,149 +150,126 @@
         </article>
       </section>
 
-      <section class="card" style="margin-bottom: 24px;">
-        <h2>Zrodla</h2>
-        {% if summary.roots %}
-          <table>
-            <thead>
-              <tr>
-                <th>Root</th>
-                <th>Ostatnio widziany plik</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for root in summary.roots %}
-                <tr>
-                  <td>{{ root["source_root"] }}</td>
-                  <td>{{ root["last_seen_at"] }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        {% else %}
-          <p class="muted">Brak danych po pierwszym skanie.</p>
-        {% endif %}
-      </section>
-
-      <div class="actions">
-        <form method="post" action="/scan">
-          <button type="submit" class="secondary">Uruchom skan</button>
-        </form>
-        <form method="post" action="/plan">
-          <button type="submit">Zbuduj kolejna plyte</button>
-        </form>
-      </div>
-
-      <section class="card" style="margin-bottom: 24px;">
-        <h2>Status skanu</h2>
-        <p>
-          Stan: <strong>{{ scan_status["state"] }}</strong><br>
-          Start: {{ scan_status["started_at"] or "-" }}<br>
-          Koniec: {{ scan_status["finished_at"] or "-" }}
-        </p>
-        <p class="muted" style="white-space: pre-wrap;">{{ scan_status["message"] }}</p>
-      </section>
-
-      <section class="card" style="margin-bottom: 24px;">
-        <h2>Status planowania</h2>
-        <p>
-          Stan: <strong>{{ plan_status["state"] }}</strong><br>
-          Plyta: {{ plan_status["disc_code"] or "-" }}<br>
-          Start: {{ plan_status["started_at"] or "-" }}<br>
-          Koniec: {{ plan_status["finished_at"] or "-" }}
-        </p>
-        <p>
-          Progress:
-          <strong>{{ plan_status["hashed_files"] }}/{{ plan_status["total_files"] }}</strong>
-        </p>
-        <p class="muted" style="white-space: pre-wrap;">{{ plan_status["message"] }}</p>
-      </section>
-
-      {% if not summary.planned_disc and summary.pending_bytes < settings.planning_limit_bytes %}
-        <section class="card" style="margin-bottom: 24px;">
-          <h2>Planowanie automatyczne</h2>
-          <p class="muted">
-            Kolejna plyta zostanie zaplanowana po przekroczeniu progu
-            {{ (settings.planning_limit_bytes / 1024 / 1024 / 1024) | round(2) }} GiB
-            podczas tygodniowego skanu.
-          </p>
-        </section>
-      {% endif %}
-
-      <section class="card planned">
-        <h2>Aktywna partia</h2>
-        {% if summary.planned_disc %}
-          <p>
-            <strong>{{ summary.planned_disc["disc_code"] }}</strong>
-            <span class="muted">{{ summary.planned_disc["label"] }}</span>
-          </p>
-          <p>
-            Status: <strong>{{ summary.planned_disc["status"] }}</strong><br>
-            Zakres: {{ summary.planned_disc["date_from"][:7] }} .. {{ summary.planned_disc["date_to"][:7] }}<br>
-            Pliki: {{ summary.planned_disc["file_count"] }}<br>
-            Rozmiar: {{ (summary.planned_disc["planned_bytes"] / 1024 / 1024 / 1024) | round(2) }} GiB
-          </p>
-          {% if summary.planned_disc["status"] == "planned" %}
-            <form method="post" action="/approve">
-              <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
-              <button type="submit" class="secondary">Zatwierdz do nagrania</button>
-            </form>
-          {% elif summary.planned_disc["status"] == "approved" %}
-            <form method="post" action="/stage">
-              <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
-              <button type="submit" class="secondary">Przygotuj staging</button>
-            </form>
-          {% elif summary.planned_disc["status"] == "staged" %}
-            <form method="post" action="/burn">
-              <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
-              <button type="submit">Nagraj plyte</button>
-            </form>
-          {% elif summary.planned_disc["status"] in ["burned", "verify_failed"] %}
-            <p class="warn">
-              Automatyczny verify nie zakonczyl jeszcze procesu.
-              W razie potrzeby uruchom recznie:
-              <code>archiver verify {{ summary.planned_disc["disc_code"] }} --mount-path /mnt/archiver-disc</code>
+      <section class="two-col" style="margin-bottom: 16px;">
+        <article class="card">
+          <div class="section-title">
+            <h2>Aktualna płyta</h2>
+            {% if summary.planned_disc %}
+              <span class="muted">{{ summary.planned_disc["status"] }}</span>
+            {% endif %}
+          </div>
+          {% if summary.planned_disc %}
+            <p>
+              <strong>{{ summary.planned_disc["disc_code"] }}</strong>
+              <span class="muted">{{ summary.planned_disc["label"] }}</span>
             </p>
+            <p>
+              Zakres: {{ summary.planned_disc["date_from"][:7] }} .. {{ summary.planned_disc["date_to"][:7] }}<br>
+              Pliki: {{ summary.planned_disc["file_count"] }}<br>
+              Rozmiar: {{ (summary.planned_disc["planned_bytes"] / 1024 / 1024 / 1024) | round(2) }} GiB
+            </p>
+            <div class="actions">
+              {% if summary.planned_disc["status"] == "planned" %}
+                <form method="post" action="/approve">
+                  <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
+                  <button type="submit" class="secondary">Zatwierdź</button>
+                </form>
+              {% elif summary.planned_disc["status"] == "approved" %}
+                <form method="post" action="/stage">
+                  <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
+                  <button type="submit" class="secondary">Stage</button>
+                </form>
+              {% elif summary.planned_disc["status"] == "staged" %}
+                <form method="post" action="/burn">
+                  <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
+                  <button type="submit">Nagraj</button>
+                </form>
+              {% elif summary.planned_disc["status"] in ["burned", "verify_failed"] %}
+                <p class="warn">
+                  Verify wymaga uwagi. W razie potrzeby uruchom:
+                  <code>archiver verify {{ summary.planned_disc["disc_code"] }} --mount-path /mnt/archiver-disc</code>
+                </p>
+              {% endif %}
+            </div>
+          {% else %}
+            <p class="muted">Brak aktywnej partii.</p>
           {% endif %}
-        {% else %}
-          <p class="muted">Brak aktualnie zaplanowanej plyty.</p>
-        {% endif %}
+        </article>
+
+        <article class="card">
+          <h2>Akcje</h2>
+          <div class="actions">
+            <form method="post" action="/scan">
+              <button type="submit" class="secondary">Skan</button>
+            </form>
+            <form method="post" action="/plan">
+              <button type="submit" class="secondary">Zaplanuj kolejną płytę</button>
+            </form>
+            <form method="post" action="/prepare">
+              <button type="submit">Zrób wszystko do nagrania</button>
+            </form>
+          </div>
+          <p class="muted" style="margin-top: 12px;">
+            „Zrób wszystko” wykonuje: skan, plan, zatwierdzenie i stage.
+            Kończy się przed nagrywaniem.
+          </p>
+        </article>
       </section>
 
-      <section class="card" style="margin-top: 24px;">
-        <h2>Ostatnie plyty</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Plyta</th>
-              <th>Status</th>
-              <th>Zakres</th>
-              <th>Rozmiar</th>
-              <th>Pliki</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for disc in summary.recent_discs %}
-              <tr>
-                <td>{{ disc["disc_code"] }}</td>
-                <td>{{ disc["status"] }}</td>
-                <td>{{ disc["date_from"][:7] if disc["date_from"] else "-" }} .. {{ disc["date_to"][:7] if disc["date_to"] else "-" }}</td>
-                <td>{{ (disc["planned_bytes"] / 1024 / 1024 / 1024) | round(2) }} GiB</td>
-                <td>{{ disc["file_count"] }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+      <section class="stack" style="margin-bottom: 16px;">
+        <article class="card">
+          <h2>1. Skan</h2>
+          <p>
+            Stan: <strong>{{ scan_status["state"] }}</strong><br>
+            Start: {{ scan_status["started_at"] or "-" }}<br>
+            Koniec: {{ scan_status["finished_at"] or "-" }}
+          </p>
+          <p class="muted" style="white-space: pre-wrap;">{{ scan_status["message"] }}</p>
+        </article>
+
+        <article class="card">
+          <h2>2. Planowanie płyty</h2>
+          <div class="progress-big">{{ plan_status["hashed_files"] }}/{{ plan_status["total_files"] }}</div>
+          <p>
+            Stan: <strong>{{ plan_status["state"] }}</strong><br>
+            Płyta: {{ plan_status["disc_code"] or "-" }}<br>
+            Start: {{ plan_status["started_at"] or "-" }}<br>
+            Koniec: {{ plan_status["finished_at"] or "-" }}
+          </p>
+          <p class="muted" style="white-space: pre-wrap;">{{ plan_status["message"] }}</p>
+        </article>
+
+        <article class="card">
+          <h2>3. Stage</h2>
+          <div class="progress-big">{{ stage_status["copied_files"] }}/{{ stage_status["total_files"] }}</div>
+          <p>
+            Stan: <strong>{{ stage_status["state"] }}</strong><br>
+            Płyta: {{ stage_status["disc_code"] or "-" }}<br>
+            Start: {{ stage_status["started_at"] or "-" }}<br>
+            Koniec: {{ stage_status["finished_at"] or "-" }}
+          </p>
+          <p class="muted" style="white-space: pre-wrap;">{{ stage_status["message"] }}</p>
+        </article>
+
+        <article class="card">
+          <h2>4. Przygotowanie do nagrania</h2>
+          <p>
+            Stan: <strong>{{ prepare_status["state"] }}</strong><br>
+            Start: {{ prepare_status["started_at"] or "-" }}<br>
+            Koniec: {{ prepare_status["finished_at"] or "-" }}
+          </p>
+          <p class="muted" style="white-space: pre-wrap;">{{ prepare_status["message"] }}</p>
+        </article>
       </section>
 
-      <section class="card" style="margin-top: 24px;">
-        <h2>Postep</h2>
+      <section class="card" style="margin-bottom: 16px;">
+        <h2>Postęp całości</h2>
         <table>
           <thead>
             <tr>
               <th>Etap</th>
-              <th>Liczba plikow</th>
-              <th>Postep</th>
+              <th>Liczba plików</th>
+              <th>Postęp</th>
             </tr>
           </thead>
           <tbody>
@@ -308,7 +290,75 @@
             </tr>
           </tbody>
         </table>
-        <p class="warn">Domyslnie `burn` sam probuje zamontowac plyte i uruchomic `verify`. Reczny `archiver verify` jest potrzebny tylko wtedy, gdy naped nie udostepnil plyty do odczytu albo verify sie nie udal.</p>
+      </section>
+
+      <section class="card" style="margin-bottom: 16px;">
+        <h2>Ostatnie płyty</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Płyta</th>
+              <th>Status</th>
+              <th>Zakres</th>
+              <th>Rozmiar</th>
+              <th>Pliki</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for disc in summary.recent_discs %}
+              <tr>
+                <td>{{ disc["disc_code"] }}</td>
+                <td>{{ disc["status"] }}</td>
+                <td>{{ disc["date_from"][:7] if disc["date_from"] else "-" }} .. {{ disc["date_to"][:7] if disc["date_to"] else "-" }}</td>
+                <td>{{ (disc["planned_bytes"] / 1024 / 1024 / 1024) | round(2) }} GiB</td>
+                <td>{{ disc["file_count"] }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <details>
+          <summary>Źródła archiwizacji</summary>
+          <div style="margin-top: 14px;" class="stack">
+            <div class="grid">
+              {% for root, available in root_checks %}
+                <article class="card" style="box-shadow:none;">
+                  <div class="muted">Źródło</div>
+                  <div style="font-size: 1rem;"><strong>{{ root.split('/')[-1] }}</strong></div>
+                  <div class="muted">{{ root }}</div>
+                  <div class="{{ 'muted' if available else 'warn' }}">
+                    {{ 'online' if available else 'offline' }}
+                  </div>
+                </article>
+              {% endfor %}
+            </div>
+
+            {% if summary.roots %}
+              <table>
+                <thead>
+                  <tr>
+                    <th>Źródło</th>
+                    <th>Ścieżka</th>
+                    <th>Ostatnio widziany plik</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for root in summary.roots %}
+                    <tr>
+                      <td>{{ root["source_root"].split('/')[-1] }}</td>
+                      <td>{{ root["source_root"] }}</td>
+                      <td>{{ root["last_seen_at"] }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% else %}
+              <p class="muted">Brak danych po pierwszym skanie.</p>
+            {% endif %}
+          </div>
+        </details>
       </section>
     </main>
   </body>

@@ -110,16 +110,13 @@ def _write_disc_indexes(
             [
                 "disc_code",
                 "label",
-                "source_root",
+                "source_folder",
                 "relative_path",
-                "absolute_path",
-                "category",
+                "archive_kind",
                 "media_date",
                 "relative_path_on_disc",
                 "size_bytes",
                 "content_hash",
-                "source_folder",
-                "archive_kind",
             ]
         )
         for row in rows:
@@ -128,16 +125,13 @@ def _write_disc_indexes(
                 [
                     disc_code,
                     label,
-                    row["source_root"],
+                    Path(row["source_root"]).name,
                     row["relative_path"],
-                    row["absolute_path"],
-                    row["category"],
+                    archive_kind,
                     row["media_date"],
                     row["relative_path_on_disc"],
                     row["size_bytes"],
                     row["content_hash"],
-                    Path(row["source_root"]).name,
-                    archive_kind,
                 ]
             )
 

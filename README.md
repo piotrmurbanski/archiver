@@ -52,8 +52,12 @@ ARCHIVER_LOG_LEVEL=INFO
 `ARCHIVER_FILL_RATIO=0.93` oznacza planowanie paczek do 93 GiB netto dla plyty 100 GB.
 Przy `plan` powstaja pliki `manifests/DISC-XXXX.csv` i `manifests/DISC-XXXX.json`.
 CSV ma sluzyc jako prosty indeks do przeszukiwania po sciezkach i nazwach plikow.
-Na koncu kazdego wiersza CSV jest tez kolumna `source_folder`, czyli nazwa udzialu lub katalogu zrodlowego, np. `Public` albo `Kasia_priv`.
-CSV ma tez kolumne `archive_kind` z uproszczonym typem pliku: `doc`, `movie`, `pic`, `raw`.
+CSV jest celowo uproszczony i zawiera tylko najwazniejsze kolumny do przegladania:
+- `source_folder`, czyli nazwa udzialu lub katalogu zrodlowego, np. `Public` albo `Kasia_priv`
+- `relative_path`
+- `archive_kind` z uproszczonym typem pliku: `doc`, `movie`, `pic`, `raw`
+
+Pelniejszy zestaw metadanych pozostaje w pliku `JSON`.
 Jesli `ARCHIVER_AUTO_PLAN=true`, tygodniowy skan sam zaplanuje nowa plyte po przekroczeniu progu.
 
 W przypadku NAS, ktory jest codziennie offline w nocy, ustaw skan poza oknem niedostepnosci:
@@ -114,6 +118,7 @@ Ta komenda:
 - odpala skan w tle po starcie aplikacji
 - pozwala sledzic status skanu z poziomu przegladarki
 - pokazuje tez progress planowania i hashowania w formie `X/Y`
+- pokazuje tez progress stage w formie `X/Y`
 
 ## Systemd
 
@@ -126,6 +131,14 @@ Po zaplanowaniu i zatwierdzeniu plyty workflow jest taki:
 ```text
 scan -> plan -> approve -> stage -> burn -> verify
 ```
+
+Z poziomu GUI dostepny jest tez przycisk `Zrob wszystko do nagrania`, ktory wykonuje:
+
+```text
+scan -> plan -> approve -> stage
+```
+
+Celowo zatrzymuje sie przed `burn`.
 
 W praktyce `burn` domyslnie probuje od razu wykonac `verify` automatycznie. Osobny krok `verify` zostaje jako fallback, jesli naped nie wystawi plyty do odczytu od razu.
 

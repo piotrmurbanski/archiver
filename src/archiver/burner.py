@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from .db import transaction
 from .hashing import hash_file
 
 logger = logging.getLogger(__name__)
+StageProgressCallback = Callable[[str, int, int], None]
 
 
 @dataclass(slots=True)
@@ -115,7 +117,12 @@ def _ensure_staging_space(settings: Settings) -> None:
         )
 
 
-def stage_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> StageResult:
+def stage_disc(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    disc_code: str,
+    progress_callback: StageProgressCallback | None = None,
+) -> StageResult:
     disc = _disc_row(conn, disc_code)
     files = _disc_files(conn, disc["id"])
     _ensure_staging_space(settings)
@@ -125,8 +132,11 @@ def stage_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> 
         shutil.rmtree(stage_dir)
     stage_dir.mkdir(parents=True, exist_ok=True)
 
-    for row in files:
+    total_files = len(files)
+    for index, row in enumerate(files, start=1):
         _copy_file(Path(row["absolute_path"]), stage_dir / row["relative_path_on_disc"])
+        if progress_callback is not None:
+            progress_callback(disc_code, index, total_files)
 
     index_dir = stage_dir / "index"
     index_dir.mkdir(parents=True, exist_ok=True)
