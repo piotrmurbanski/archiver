@@ -3,6 +3,9 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    {% if auto_refresh %}
+      <meta http-equiv="refresh" content="{{ auto_refresh_seconds }}">
+    {% endif %}
     <title>Archiver</title>
     <style>
       :root {
@@ -125,6 +128,9 @@
       <p class="subtitle">
         Archiwizacja na M-Disc. Limit planowania:
         <code>{{ (settings.planning_limit_bytes / 1024 / 1024 / 1024) | round(2) }} GiB</code>
+        {% if auto_refresh %}
+          <span class="muted">Strona odświeża się automatycznie co {{ auto_refresh_seconds }} s.</span>
+        {% endif %}
       </p>
 
       <section class="grid" style="margin-bottom: 16px;">
@@ -142,7 +148,19 @@
         </article>
         <article class="card">
           <div class="muted">Zaplanowane</div>
-          <div class="metric">{{ summary.counts.get("planned", 0) }}</div>
+          <div class="metric">
+            {% if summary.planned_disc %}
+              {{
+                summary.counts.get("planned", 0)
+                + summary.counts.get("approved", 0)
+                + summary.counts.get("staged", 0)
+                + summary.counts.get("burning", 0)
+                + summary.counts.get("burned", 0)
+              }}/{{ summary.planned_disc["file_count"] }}
+            {% else %}
+              {{ summary.counts.get("planned", 0) }}
+            {% endif %}
+          </div>
         </article>
         <article class="card">
           <div class="muted">Wszystkie pliki</div>
@@ -169,6 +187,12 @@
               Rozmiar: {{ (summary.planned_disc["planned_bytes"] / 1024 / 1024 / 1024) | round(2) }} GiB
             </p>
             <div class="actions">
+              {% if summary.planned_disc["status"] in ["planned", "approved", "staged"] %}
+                <form method="post" action="/replan">
+                  <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
+                  <button type="submit" class="secondary">Zaplanuj jeszcze raz</button>
+                </form>
+              {% endif %}
               {% if summary.planned_disc["status"] == "planned" %}
                 <form method="post" action="/approve">
                   <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
@@ -219,8 +243,12 @@
       <section class="stack" style="margin-bottom: 16px;">
         <article class="card">
           <h2>1. Skan</h2>
+          <div class="progress-big">{{ scan_status["scanned_files"] }}</div>
           <p>
             Stan: <strong>{{ scan_status["state"] }}</strong><br>
+            Źródło: {{ scan_status["current_root"] or "-" }}<br>
+            Nowe: {{ scan_status["new_files"] }}<br>
+            Zmienione: {{ scan_status["changed_files"] }}<br>
             Start: {{ scan_status["started_at"] or "-" }}<br>
             Koniec: {{ scan_status["finished_at"] or "-" }}
           </p>

@@ -274,3 +274,64 @@ def approve_disc(conn: sqlite3.Connection, disc_code: str) -> bool:
         )
     logger.info("approved disc %s", disc_code)
     return True
+
+
+def replan_disc(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    disc_code: str,
+    progress_callback: ProgressCallback | None = None,
+) -> PlanResult:
+    disc = conn.execute(
+        """
+        SELECT id, disc_code, status
+        FROM discs
+        WHERE disc_code = ?
+        """,
+        (disc_code,),
+    ).fetchone()
+    if disc is None:
+        raise ValueError(f"Disc not found: {disc_code}")
+
+    if disc["status"] not in {"planned", "approved", "staged"}:
+        raise ValueError(
+            f"Disc {disc_code} cannot be replanned from status {disc['status']}. "
+            "Only planned, approved, and staged discs can be replanned."
+        )
+
+    logger.info("replanning disc %s from status %s", disc_code, disc["status"])
+    with transaction(conn):
+        conn.execute(
+            """
+            UPDATE files
+            SET status = CASE
+                WHEN changed_after_archive = 1 THEN 'changed_after_archive'
+                ELSE 'new'
+            END,
+                disc_id = NULL,
+                content_hash = NULL
+            WHERE disc_id = ?
+            """,
+            (disc["id"],),
+        )
+        conn.execute("DELETE FROM disc_files WHERE disc_id = ?", (disc["id"],))
+        conn.execute("DELETE FROM discs WHERE id = ?", (disc["id"],))
+
+    for artifact in (
+        settings.manifests_dir / f"{disc_code}.csv",
+        settings.manifests_dir / f"{disc_code}.json",
+        settings.iso_dir / f"{disc_code}.iso",
+    ):
+        if artifact.exists():
+            artifact.unlink()
+
+    stage_dir = settings.staging_dir / disc_code
+    if stage_dir.exists():
+        for child in sorted(stage_dir.rglob("*"), reverse=True):
+            if child.is_file() or child.is_symlink():
+                child.unlink()
+            elif child.is_dir():
+                child.rmdir()
+        stage_dir.rmdir()
+
+    return plan_disc(conn, settings, progress_callback=progress_callback)

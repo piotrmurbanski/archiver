@@ -9,7 +9,7 @@ from .config import Settings
 from .notifier import send_notification
 from .planner import plan_disc
 from .repository import active_disc, pending_bytes
-from .scanner import root_is_available, scan_sources
+from .scanner import ScanProgressCallback, root_is_available, scan_sources
 
 logger = logging.getLogger(__name__)
 PlanProgressCallback = Callable[[str, int, int], None]
@@ -35,6 +35,7 @@ def run_scan_cycle(
     conn: sqlite3.Connection,
     settings: Settings,
     plan_progress_callback: PlanProgressCallback | None = None,
+    scan_progress_callback: ScanProgressCallback | None = None,
 ) -> ScanCycleResult:
     unavailable_roots = [str(root) for root in settings.roots if not root_is_available(root)]
     if unavailable_roots:
@@ -42,7 +43,7 @@ def run_scan_cycle(
         logger.warning(message)
         return ScanCycleResult(skipped=True, message=message)
 
-    stats = scan_sources(conn, settings)
+    stats = scan_sources(conn, settings, progress_callback=scan_progress_callback)
     summary = (
         "scan completed: "
         f"scanned={stats.scanned_files} "

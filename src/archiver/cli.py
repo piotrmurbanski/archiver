@@ -140,7 +140,7 @@ def main() -> None:
         return
 
     if args.command == "start":
-        app = create_app(conn, settings, startup_scan=True)
+        app = create_app(conn, settings)
         uvicorn.run(app, host=settings.web_host, port=settings.web_port)
         return
 

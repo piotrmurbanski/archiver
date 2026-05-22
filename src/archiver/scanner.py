@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +29,9 @@ class ScanStats:
     missing_roots: int = 0
     skipped_files: int = 0
     offline_roots: int = 0
+
+
+ScanProgressCallback = Callable[[str | None, ScanStats], None]
 
 
 def root_is_available(root: Path) -> bool:
@@ -61,10 +66,15 @@ def _fingerprint(size_bytes: int, mtime_ns: int) -> str:
     return f"{size_bytes}:{mtime_ns}"
 
 
-def scan_sources(conn: sqlite3.Connection, settings: Settings) -> ScanStats:
+def scan_sources(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    progress_callback: ScanProgressCallback | None = None,
+) -> ScanStats:
     stats = ScanStats()
     now = datetime.now(UTC).isoformat()
     logger.info("scan started for %d roots", len(settings.roots))
+    last_progress_at = 0.0
     with transaction(conn):
         for root in settings.roots:
             if not root.exists():
@@ -76,6 +86,8 @@ def scan_sources(conn: sqlite3.Connection, settings: Settings) -> ScanStats:
                 logger.warning("scan skipped offline root: %s", root)
                 continue
             logger.info("scanning root: %s", root)
+            if progress_callback is not None:
+                progress_callback(str(root), stats)
             for path in root.rglob("*"):
                 if not path.is_file():
                     continue
@@ -121,38 +133,44 @@ def scan_sources(conn: sqlite3.Connection, settings: Settings) -> ScanStats:
                         ),
                     )
                     stats.new_files += 1
-                    continue
-
-                if existing["fingerprint"] == fingerprint:
+                elif existing["fingerprint"] == fingerprint:
                     conn.execute(
                         "UPDATE files SET absolute_path = ?, last_seen_at = ? WHERE id = ?",
                         (str(path), now, existing["id"]),
                     )
                     stats.unchanged_files += 1
-                    continue
+                else:
+                    next_status = "changed_after_archive" if existing["status"] == "verified" else "new"
+                    conn.execute(
+                        """
+                        UPDATE files
+                        SET absolute_path = ?, size_bytes = ?, mtime_ns = ?, fingerprint = ?,
+                            category = ?, media_date = ?, status = ?, disc_id = NULL,
+                            archived_at = NULL, changed_after_archive = 1, last_seen_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            str(path),
+                            stat_result.st_size,
+                            stat_result.st_mtime_ns,
+                            fingerprint,
+                            category,
+                            media_date,
+                            next_status,
+                            now,
+                            existing["id"],
+                        ),
+                    )
+                    stats.changed_files += 1
 
-                next_status = "changed_after_archive" if existing["status"] == "verified" else "new"
-                conn.execute(
-                    """
-                    UPDATE files
-                    SET absolute_path = ?, size_bytes = ?, mtime_ns = ?, fingerprint = ?,
-                        category = ?, media_date = ?, status = ?, disc_id = NULL,
-                        archived_at = NULL, changed_after_archive = 1, last_seen_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        str(path),
-                        stat_result.st_size,
-                        stat_result.st_mtime_ns,
-                        fingerprint,
-                        category,
-                        media_date,
-                        next_status,
-                        now,
-                        existing["id"],
-                    ),
-                )
-                stats.changed_files += 1
+                now_monotonic = time.monotonic()
+                if progress_callback is not None and (
+                    stats.scanned_files == 1
+                    or stats.scanned_files % 100 == 0
+                    or now_monotonic - last_progress_at >= 2.0
+                ):
+                    progress_callback(str(root), stats)
+                    last_progress_at = now_monotonic
     logger.info(
         "scan completed: scanned=%d new=%d changed=%d unchanged=%d skipped=%d missing_roots=%d offline_roots=%d",
         stats.scanned_files,
@@ -163,4 +181,6 @@ def scan_sources(conn: sqlite3.Connection, settings: Settings) -> ScanStats:
         stats.missing_roots,
         stats.offline_roots,
     )
+    if progress_callback is not None:
+        progress_callback(None, stats)
     return stats

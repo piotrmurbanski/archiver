@@ -115,8 +115,8 @@ archiver start
 
 Ta komenda:
 - uruchamia Web UI od razu
-- odpala skan w tle po starcie aplikacji
-- pozwala sledzic status skanu z poziomu przegladarki
+- nie odpala skanu automatycznie
+- pozwala uruchomic skan recznie z poziomu przegladarki
 - pokazuje tez progress planowania i hashowania w formie `X/Y`
 - pokazuje tez progress stage w formie `X/Y`
 
