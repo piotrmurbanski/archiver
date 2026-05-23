@@ -40,6 +40,7 @@ class Settings:
     auto_verify: bool
     verify_retry_count: int
     verify_retry_delay_seconds: int
+    verify_mount_wait_seconds: int
     log_level: str
     log_max_bytes: int
     log_backup_count: int
@@ -75,12 +76,13 @@ def load_settings() -> Settings:
     timezone = os.environ.get("ARCHIVER_TIMEZONE", "Europe/Warsaw")
     scan_hour = int(os.environ.get("ARCHIVER_SCAN_HOUR", "10"))
     optical_device = os.environ.get("ARCHIVER_OPTICAL_DEVICE") or None
-    verify_mount = Path(os.environ.get("ARCHIVER_VERIFY_MOUNT", "/mnt/archiver-disc")).expanduser()
+    verify_mount = Path(os.environ.get("ARCHIVER_VERIFY_MOUNT", "/home/piotr/sandbox/archiver/mnt/archiver-disc")).expanduser()
     auto_plan = os.environ.get("ARCHIVER_AUTO_PLAN", "true").strip().lower() in {"1", "true", "yes", "on"}
     notify_command = os.environ.get("ARCHIVER_NOTIFY_COMMAND") or None
-    auto_verify = os.environ.get("ARCHIVER_AUTO_VERIFY", "true").strip().lower() in {"1", "true", "yes", "on"}
+    auto_verify = os.environ.get("ARCHIVER_AUTO_VERIFY", "false").strip().lower() in {"1", "true", "yes", "on"}
     verify_retry_count = int(os.environ.get("ARCHIVER_VERIFY_RETRY_COUNT", "10"))
     verify_retry_delay_seconds = int(os.environ.get("ARCHIVER_VERIFY_RETRY_DELAY_SECONDS", "6"))
+    verify_mount_wait_seconds = int(os.environ.get("ARCHIVER_VERIFY_MOUNT_WAIT_SECONDS", "20"))
     log_level = os.environ.get("ARCHIVER_LOG_LEVEL", "INFO").strip().upper()
     log_max_bytes = int(os.environ.get("ARCHIVER_LOG_MAX_BYTES", "10485760"))
     log_backup_count = int(os.environ.get("ARCHIVER_LOG_BACKUP_COUNT", "5"))
@@ -106,6 +108,7 @@ def load_settings() -> Settings:
         auto_verify=auto_verify,
         verify_retry_count=verify_retry_count,
         verify_retry_delay_seconds=verify_retry_delay_seconds,
+        verify_mount_wait_seconds=verify_mount_wait_seconds,
         log_level=log_level,
         log_max_bytes=log_max_bytes,
         log_backup_count=log_backup_count,

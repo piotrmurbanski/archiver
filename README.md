@@ -43,9 +43,10 @@ ARCHIVER_FILL_RATIO=0.93
 ARCHIVER_WEB_HOST=0.0.0.0
 ARCHIVER_WEB_PORT=8765
 ARCHIVER_AUTO_PLAN=true
-ARCHIVER_AUTO_VERIFY=true
+ARCHIVER_AUTO_VERIFY=false
 ARCHIVER_VERIFY_RETRY_COUNT=10
 ARCHIVER_VERIFY_RETRY_DELAY_SECONDS=6
+ARCHIVER_VERIFY_MOUNT_WAIT_SECONDS=20
 ARCHIVER_LOG_DIR=/home/piotr/sandbox/archiver/logs
 ARCHIVER_LOG_LEVEL=INFO
 ```
@@ -148,7 +149,9 @@ scan -> plan -> approve -> stage
 
 Celowo zatrzymuje sie przed `burn`.
 
-W praktyce `burn` domyslnie probuje od razu wykonac `verify` automatycznie. Osobny krok `verify` zostaje jako fallback, jesli naped nie wystawi plyty do odczytu od razu.
+W praktyce `burn` domyslnie konczy sie po nagraniu. `verify` uruchamiasz osobno po ponownym wsunieciu plyty albo z przycisku w GUI.
+Po kliknieciu `Zweryfikuj ponownie` aplikacja czeka jeszcze przez `ARCHIVER_VERIFY_MOUNT_WAIT_SECONDS`,
+czy system sam zamontuje plyte po jej wsunieciu.
 
 Przygotowanie stagingu:
 
@@ -168,7 +171,7 @@ Weryfikacja po zamontowaniu plyty:
 archiver verify DISC-0001 --mount-path /mnt/archiver-disc
 ```
 
-Automatyczny verify po `burn` wykonuje do `ARCHIVER_VERIFY_RETRY_COUNT` prob mountowania plyty, z opoznieniem `ARCHIVER_VERIFY_RETRY_DELAY_SECONDS` sekund miedzy probami.
+Jesli kiedys wlaczysz `ARCHIVER_AUTO_VERIFY=true`, automatyczny verify po `burn` wykona do `ARCHIVER_VERIFY_RETRY_COUNT` prob mountowania plyty, z opoznieniem `ARCHIVER_VERIFY_RETRY_DELAY_SECONDS` sekund miedzy probami.
 
 W tej wersji `stage` kopiuje pliki do katalogu roboczego i doklada na plyte:
 
@@ -189,7 +192,7 @@ Do `burn` potrzebny jest `xorriso` oraz ustawienie:
 
 ```bash
 ARCHIVER_OPTICAL_DEVICE=/dev/sr0
-ARCHIVER_VERIFY_MOUNT=/mnt/archiver-disc
+ARCHIVER_VERIFY_MOUNT=/home/piotr/sandbox/archiver/mnt/archiver-disc
 ARCHIVER_STAGING_DIR=/home/piotr/sandbox/archiver/staging
 ARCHIVER_ISO_DIR=/home/piotr/sandbox/archiver/iso
 ```
@@ -201,7 +204,7 @@ Przed startem `growisofs` narzedzie:
 
 Jesli `growisofs` wypisze komunikaty typu `Input/output error`, `write failed` albo `FLUSH CACHE failed`, burn zostanie oznaczony jako `burn_failed`, nawet jesli proces zwroci kod `0`.
 
-`verify` oznacza pliki jako `verified` dopiero po zgodnosci hashy z zawartoscia plyty.
+`verify` jest osobnym krokiem od `burn` i oznacza pliki jako `verified` dopiero po zgodnosci hashy z zawartoscia plyty.
 Po udanym `verify` katalog `staging/DISC-XXXX/` jest automatycznie usuwany.
 Jesli automatyczny verify po `burn` sie nie powiedzie, plyta dostaje status `verify_failed` i mozna powtorzyc tylko sam krok verify.
 

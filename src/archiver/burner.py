@@ -22,6 +22,9 @@ _MEDIA_BLOCKS_PATTERN = re.compile(
     r"Media blocks\s*:\s*\d+\s+readable\s*,\s*(\d+)\s+writable\s*,\s*(\d+)\s+overall",
     re.IGNORECASE,
 )
+_MEDIA_CURRENT_PATTERN = re.compile(r"Media current:\s*(.+)", re.IGNORECASE)
+_MEDIA_STATUS_PATTERN = re.compile(r"Media status\s*:\s*(.+)", re.IGNORECASE)
+_MEDIA_SUMMARY_PATTERN = re.compile(r"Media summary:\s*(.+)", re.IGNORECASE)
 _GROWISOFS_FATAL_MARKERS = (
     "unable to write@lba",
     "write failed",
@@ -51,6 +54,15 @@ class BurnResult:
 class VerifyResult:
     disc_code: str
     checked_files: int
+
+
+@dataclass(slots=True)
+class OpticalMediaProbe:
+    writable_bytes: int
+    writable_blocks: int
+    media_current: str | None
+    media_status: str | None
+    media_summary: str | None
 
 
 def _format_bytes(size: int) -> str:
@@ -200,7 +212,7 @@ def _require_growisofs() -> str:
     return binary
 
 
-def _probe_optical_writable_bytes(settings: Settings) -> int:
+def probe_optical_media(settings: Settings) -> OpticalMediaProbe:
     if not settings.optical_device:
         raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
     xorriso = _require_xorriso()
@@ -218,18 +230,27 @@ def _probe_optical_writable_bytes(settings: Settings) -> int:
         raise RuntimeError(f"Unable to parse optical media capacity from xorriso output: {output}")
     writable_blocks = int(match.group(1))
     writable_bytes = writable_blocks * 2048
+    current_match = _MEDIA_CURRENT_PATTERN.search(output)
+    status_match = _MEDIA_STATUS_PATTERN.search(output)
+    summary_match = _MEDIA_SUMMARY_PATTERN.search(output)
     logger.info(
         "optical media capacity probe: device=%s writable_blocks=%d writable_bytes=%s",
         settings.optical_device,
         writable_blocks,
         _format_bytes(writable_bytes),
     )
-    return writable_bytes
+    return OpticalMediaProbe(
+        writable_bytes=writable_bytes,
+        writable_blocks=writable_blocks,
+        media_current=current_match.group(1).strip() if current_match else None,
+        media_status=status_match.group(1).strip() if status_match else None,
+        media_summary=summary_match.group(1).strip() if summary_match else None,
+    )
 
 
 def _ensure_iso_fits_optical_media(settings: Settings, disc_code: str, iso_path: Path) -> None:
     iso_size = iso_path.stat().st_size
-    writable_bytes = _probe_optical_writable_bytes(settings)
+    writable_bytes = probe_optical_media(settings).writable_bytes
     if iso_size > writable_bytes:
         logger.error(
             "iso too large for optical media: disc=%s iso=%s media=%s path=%s",
@@ -428,6 +449,30 @@ def _attempt_auto_verify(conn: sqlite3.Connection, settings: Settings, disc_code
     if last_error is not None:
         raise RuntimeError(f"Automatic verify failed: {last_error}") from last_error
     return None
+
+
+def mount_and_verify_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> VerifyResult:
+    if not settings.optical_device:
+        raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
+    for attempt in range(settings.verify_mount_wait_seconds + 1):
+        mounted_path = _mounted_device_path(settings.optical_device)
+        if mounted_path is not None:
+            logger.info("using mounted optical disc at %s", mounted_path)
+            return verify_disc(conn, settings, disc_code, mount_path=mounted_path)
+        if attempt < settings.verify_mount_wait_seconds:
+            time.sleep(1)
+    raise RuntimeError(
+        "Plyta nie zostala automatycznie zamontowana po wsunieciu. "
+        "Wsunc plyte, odczekaj chwile i kliknij 'Zweryfikuj ponownie' jeszcze raz."
+    )
+
+
+def auto_mount_and_verify_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> VerifyResult:
+    mount_path = _mount_optical_disc(settings)
+    try:
+        return verify_disc(conn, settings, disc_code, mount_path=mount_path)
+    finally:
+        _unmount_optical_disc(settings, mount_path)
 
 
 def create_iso(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> Path:

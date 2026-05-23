@@ -165,8 +165,10 @@ def plan_disc(
     conn: sqlite3.Connection,
     settings: Settings,
     progress_callback: ProgressCallback | None = None,
+    planning_limit_bytes: int | None = None,
 ) -> PlanResult:
-    logger.info("planning disc with limit=%d bytes", settings.planning_limit_bytes)
+    limit_bytes = planning_limit_bytes or settings.planning_limit_bytes
+    logger.info("planning disc with limit=%d bytes", limit_bytes)
     already_planned = conn.execute(
         "SELECT disc_code, file_count, planned_bytes FROM discs WHERE status IN ('planned', 'approved', 'staged', 'burning', 'burned') ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -190,7 +192,7 @@ def plan_disc(
     picked: list[sqlite3.Row] = []
     total_bytes = 0
     for row in rows:
-        if total_bytes + row["size_bytes"] > settings.planning_limit_bytes and picked:
+        if total_bytes + row["size_bytes"] > limit_bytes and picked:
             break
         picked.append(row)
         total_bytes += row["size_bytes"]
@@ -294,6 +296,7 @@ def replan_disc(
     settings: Settings,
     disc_code: str,
     progress_callback: ProgressCallback | None = None,
+    planning_limit_bytes: int | None = None,
 ) -> PlanResult:
     disc = conn.execute(
         """
@@ -347,4 +350,4 @@ def replan_disc(
                 child.rmdir()
         stage_dir.rmdir()
 
-    return plan_disc(conn, settings, progress_callback=progress_callback)
+    return plan_disc(conn, settings, progress_callback=progress_callback, planning_limit_bytes=planning_limit_bytes)

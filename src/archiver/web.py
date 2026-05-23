@@ -12,7 +12,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from .burner import burn_disc, stage_disc
+from .burner import burn_disc, probe_optical_media, stage_disc
 from .config import Settings
 from .planner import approve_disc, plan_disc, replan_disc
 from .repository import active_disc, status_summary
@@ -40,12 +40,16 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
     default_stage_status = defaults["stage_status"]
     default_prepare_status = defaults["prepare_status"]
     default_burn_status = defaults["burn_status"]
+    default_verify_status = defaults["verify_status"]
+    default_media_probe = defaults["media_probe"]
     default_root_checks = defaults["root_checks"]
     app.state.scan_status = dict(default_scan_status)
     app.state.plan_status = dict(default_plan_status)
     app.state.stage_status = dict(default_stage_status)
     app.state.prepare_status = dict(default_prepare_status)
     app.state.burn_status = dict(default_burn_status)
+    app.state.verify_status = dict(default_verify_status)
+    app.state.media_probe = default_media_probe
     app.state.root_checks = [dict(item) for item in default_root_checks]
 
     def save_status_snapshot() -> None:
@@ -55,6 +59,8 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "stage_status": app.state.stage_status,
             "prepare_status": app.state.prepare_status,
             "burn_status": app.state.burn_status,
+            "verify_status": app.state.verify_status,
+            "media_probe": app.state.media_probe,
             "root_checks": app.state.root_checks,
         }
         with state_lock:
@@ -67,8 +73,15 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
         app.state.stage_status = payload["stage_status"]
         app.state.prepare_status = payload["prepare_status"]
         app.state.burn_status = payload["burn_status"]
+        app.state.verify_status = payload["verify_status"]
+        app.state.media_probe = payload.get("media_probe", default_media_probe)
         app.state.root_checks = payload["root_checks"]
-        for status in (app.state.scan_status, app.state.plan_status, app.state.stage_status, app.state.prepare_status):
+        for status in (
+            app.state.scan_status,
+            app.state.plan_status,
+            app.state.stage_status,
+            app.state.prepare_status,
+        ):
             if status.get("state") == "running":
                 status["state"] = "interrupted"
                 status["finished_at"] = datetime.now(UTC).isoformat()
@@ -82,6 +95,8 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
         app.state.stage_status = payload["stage_status"]
         app.state.prepare_status = payload["prepare_status"]
         app.state.burn_status = payload["burn_status"]
+        app.state.verify_status = payload["verify_status"]
+        app.state.media_probe = payload.get("media_probe", default_media_probe)
         app.state.root_checks = payload["root_checks"]
 
     def update_scan_status(status: dict[str, object]) -> None:
@@ -104,6 +119,14 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
         app.state.burn_status = status
         save_status_snapshot()
 
+    def update_verify_status(status: dict[str, object]) -> None:
+        app.state.verify_status = status
+        save_status_snapshot()
+
+    def update_media_probe(media_probe: dict[str, object] | None) -> None:
+        app.state.media_probe = media_probe
+        save_status_snapshot()
+
     def update_root_checks(root_checks: list[dict[str, object]]) -> None:
         app.state.root_checks = root_checks
         save_status_snapshot()
@@ -118,7 +141,9 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
         if app.state.stage_status["state"] == "running":
             return "Trwa stage. Poczekaj na jego zakonczenie."
         if app.state.burn_status["state"] == "running":
-            return "Trwa nagrywanie lub verify. Poczekaj na jego zakonczenie."
+            return "Trwa nagrywanie. Poczekaj na jego zakonczenie."
+        if app.state.verify_status["state"] == "running":
+            return "Trwa verify. Poczekaj na jego zakonczenie."
         if app.state.prepare_status["state"] == "running":
             return "Trwa zlozony workflow. Poczekaj na jego zakonczenie."
         return None
@@ -175,6 +200,16 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "message": message,
         })
 
+    def set_verify_message(message: str, disc_code: str | None = None) -> None:
+        update_verify_status({
+            "state": "failed",
+            "disc_code": disc_code if disc_code is not None else app.state.verify_status["disc_code"],
+            "progress_percent": app.state.verify_status["progress_percent"],
+            "started_at": app.state.verify_status["started_at"],
+            "finished_at": datetime.now(UTC).isoformat(),
+            "message": message,
+        })
+
     def plan_progress_callback(disc_code: str, hashed_files: int, total_files: int) -> None:
         update_plan_status({
             "state": "running",
@@ -223,6 +258,19 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "finished_at": None,
             "message": message,
         })
+
+    def resolve_planning_limit(plan_target: str) -> tuple[int, str]:
+        if plan_target == "media":
+            probe = probe_optical_media(settings)
+            update_media_probe({
+                "writable_bytes": probe.writable_bytes,
+                "writable_blocks": probe.writable_blocks,
+                "media_current": probe.media_current,
+                "media_status": probe.media_status,
+                "media_summary": probe.media_summary,
+            })
+            return int(probe.writable_bytes * settings.fill_ratio), "media"
+        return settings.planning_limit_bytes, "profile"
 
     def start_scan_job(trigger: str) -> bool:
         busy_message = workflow_busy_message()
@@ -282,7 +330,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
         threading.Thread(target=worker, name="archiver-scan", daemon=True).start()
         return True
 
-    def start_plan_job(trigger: str) -> bool:
+    def start_plan_job(trigger: str, plan_target: str = "profile") -> bool:
         busy_message = workflow_busy_message()
         if busy_message is not None:
             set_plan_message(busy_message)
@@ -302,7 +350,13 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                 "message": f"Planning started by {trigger}.",
             })
             try:
-                result = plan_disc(conn, settings, progress_callback=plan_progress_callback)
+                planning_limit_bytes, resolved_target = resolve_planning_limit(plan_target)
+                result = plan_disc(
+                    conn,
+                    settings,
+                    progress_callback=plan_progress_callback,
+                    planning_limit_bytes=planning_limit_bytes,
+                )
                 if result.disc_code is None:
                     update_plan_status({
                         "state": "completed",
@@ -311,7 +365,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                         "total_files": 0,
                         "started_at": app.state.plan_status["started_at"],
                         "finished_at": datetime.now(UTC).isoformat(),
-                        "message": "No files available for planning.",
+                        "message": f"No files available for planning ({resolved_target}).",
                     })
                 else:
                     update_plan_status({
@@ -321,7 +375,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                         "total_files": result.file_count,
                         "started_at": app.state.plan_status["started_at"],
                         "finished_at": datetime.now(UTC).isoformat(),
-                        "message": f"Planned {result.disc_code}: {result.file_count} files.",
+                        "message": f"Planned {result.disc_code}: {result.file_count} files ({resolved_target}).",
                     })
             except Exception as exc:
                 logger.exception("background plan failed")
@@ -340,7 +394,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
         threading.Thread(target=worker, name="archiver-plan", daemon=True).start()
         return True
 
-    def start_replan_job(trigger: str, disc_code: str) -> bool:
+    def start_replan_job(trigger: str, disc_code: str, plan_target: str = "profile") -> bool:
         busy_message = workflow_busy_message()
         if busy_message is not None:
             set_plan_message(busy_message, disc_code)
@@ -360,7 +414,14 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                 "message": f"Replanning started by {trigger} for {disc_code}.",
             })
             try:
-                result = replan_disc(conn, settings, disc_code, progress_callback=plan_progress_callback)
+                planning_limit_bytes, resolved_target = resolve_planning_limit(plan_target)
+                result = replan_disc(
+                    conn,
+                    settings,
+                    disc_code,
+                    progress_callback=plan_progress_callback,
+                    planning_limit_bytes=planning_limit_bytes,
+                )
                 update_plan_status({
                     "state": "completed",
                     "disc_code": result.disc_code,
@@ -368,7 +429,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                     "total_files": result.file_count,
                     "started_at": app.state.plan_status["started_at"],
                     "finished_at": datetime.now(UTC).isoformat(),
-                    "message": f"Replanned {result.disc_code}: {result.file_count} files.",
+                    "message": f"Replanned {result.disc_code}: {result.file_count} files ({resolved_target}).",
                 })
             except Exception as exc:
                 logger.exception("background replan failed")
@@ -523,6 +584,14 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "finished_at": None,
             "message": f"Nagrywanie wystartowalo przez {trigger}.",
         })
+        update_verify_status({
+            "state": "idle",
+            "disc_code": disc_code,
+            "progress_percent": None,
+            "started_at": None,
+            "finished_at": None,
+            "message": "Verify jeszcze nie wystartowalo dla tej plyty.",
+        })
         command = [
             "systemd-run",
             "--user",
@@ -541,6 +610,39 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             return False
         return True
 
+    def start_verify_job(trigger: str, disc_code: str) -> bool:
+        reload_status_snapshot()
+        busy_message = workflow_busy_message()
+        if busy_message is not None:
+            set_verify_message(busy_message, disc_code)
+            return False
+        unit_name = f"archiver-verify-{disc_code.lower()}"
+        update_verify_status({
+            "state": "running",
+            "disc_code": disc_code,
+            "progress_percent": None,
+            "started_at": datetime.now(UTC).isoformat(),
+            "finished_at": None,
+            "message": f"Verify wystartowalo przez {trigger}. Wsun plyte i poczekaj na automatyczny mount systemu.",
+        })
+        command = [
+            "systemd-run",
+            "--user",
+            "--unit",
+            unit_name,
+            "--collect",
+            f"--working-directory={Path.cwd()}",
+            str(Path.cwd() / ".venv/bin/archiver"),
+            "verify-worker",
+            disc_code,
+        ]
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+        if result.returncode != 0:
+            error_text = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+            set_verify_message(error_text or "Nie udalo sie uruchomic joba verify.", disc_code)
+            return False
+        return True
+
     if startup_scan:
         @app.on_event("startup")
         def _startup_scan() -> None:
@@ -550,6 +652,24 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
     def index(request: Request):
         reload_status_snapshot()
         summary = status_summary(conn)
+        media_probe = app.state.media_probe
+        if (
+            settings.optical_device
+            and app.state.burn_status["state"] != "running"
+            and media_probe is None
+        ):
+            try:
+                probe = probe_optical_media(settings)
+                media_probe = {
+                    "writable_bytes": probe.writable_bytes,
+                    "writable_blocks": probe.writable_blocks,
+                    "media_current": probe.media_current,
+                    "media_status": probe.media_status,
+                    "media_summary": probe.media_summary,
+                }
+                update_media_probe(media_probe)
+            except Exception:
+                media_probe = None
         auto_refresh = any(
             status["state"] == "running"
             for status in (
@@ -557,6 +677,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                 app.state.plan_status,
                 app.state.stage_status,
                 app.state.burn_status,
+                app.state.verify_status,
                 app.state.prepare_status,
             )
         )
@@ -572,21 +693,23 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                 "stage_status": app.state.stage_status,
                 "burn_status": app.state.burn_status,
                 "prepare_status": app.state.prepare_status,
+                "media_probe": media_probe,
+                "verify_status": app.state.verify_status,
                 "auto_refresh": auto_refresh,
                 "auto_refresh_seconds": 4,
             },
         )
 
     @app.post("/plan")
-    def plan():
+    def plan(plan_target: str = Form("profile")):
         reload_status_snapshot()
-        start_plan_job("web")
+        start_plan_job("web", plan_target=plan_target)
         return RedirectResponse(url="/", status_code=303)
 
     @app.post("/replan")
-    def replan(disc_code: str = Form(...)):
+    def replan(disc_code: str = Form(...), plan_target: str = Form("profile")):
         reload_status_snapshot()
-        start_replan_job("web", disc_code)
+        start_replan_job("web", disc_code, plan_target=plan_target)
         return RedirectResponse(url="/", status_code=303)
 
     @app.post("/approve")
@@ -605,6 +728,12 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
     def burn(disc_code: str = Form(...)):
         reload_status_snapshot()
         start_burn_job("web", disc_code)
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/verify")
+    def verify(disc_code: str = Form(...)):
+        reload_status_snapshot()
+        start_verify_job("web", disc_code)
         return RedirectResponse(url="/", status_code=303)
 
     @app.api_route("/burn", methods=["GET", "HEAD"])

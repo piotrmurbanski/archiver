@@ -50,6 +50,15 @@ def default_status_payload(settings: Settings) -> dict[str, object]:
             "finished_at": None,
             "message": "No burn started yet.",
         },
+        "verify_status": {
+            "state": "idle",
+            "disc_code": None,
+            "progress_percent": None,
+            "started_at": None,
+            "finished_at": None,
+            "message": "No verify started yet.",
+        },
+        "media_probe": None,
         "root_checks": [{"root": str(root), "available": None} for root in settings.roots],
     }
 

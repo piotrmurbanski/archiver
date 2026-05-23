@@ -7,7 +7,7 @@ from pathlib import Path
 
 import uvicorn
 
-from .burner import burn_disc, stage_disc, verify_disc
+from .burner import burn_disc, mount_and_verify_disc, stage_disc, verify_disc
 from .config import load_settings
 from .db import connect, init_db
 from .logging_setup import configure_logging
@@ -46,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     burn.add_argument("disc_code")
     burn_worker = subparsers.add_parser("burn-worker")
     burn_worker.add_argument("disc_code")
+    verify_worker = subparsers.add_parser("verify-worker")
+    verify_worker.add_argument("disc_code")
     verify = subparsers.add_parser("verify")
     verify.add_argument("disc_code")
     verify.add_argument("--mount-path", default=None)
@@ -162,11 +164,11 @@ def main() -> None:
 
         try:
             result = burn_disc(conn, settings, args.disc_code, progress_callback=burn_progress_callback)
-            final_state = "verified" if result.verified else "completed"
+            final_state = "completed" if not result.verify_error else "completed_with_verify_warning"
             final_message = (
-                f"Nagrywanie i verify zakonczone dla {result.disc_code}."
-                if result.verified
-                else f"Nagrywanie zakonczone dla {result.disc_code}. Verify: {result.verify_error or 'oczekuje'}"
+                f"Nagrywanie zakonczone dla {result.disc_code}."
+                if not result.verify_error
+                else f"Nagrywanie zakonczone dla {result.disc_code}. Verify: {result.verify_error}"
             )
             payload = load_status_payload(status_file, settings)
             current = payload.get("burn_status", {})
@@ -203,6 +205,51 @@ def main() -> None:
         send_notification(settings, "Archiver: verify complete", f"{result.disc_code} verified successfully")
         print(f"Verified {result.disc_code}: {result.checked_files} files")
         return
+
+    if args.command == "verify-worker":
+        status_file = settings.db_path.parent / "web-status.json"
+
+        def persist_verify_status(status: dict[str, object]) -> None:
+            payload = load_status_payload(status_file, settings)
+            payload["verify_status"] = status
+            save_status_payload(status_file, payload)
+
+        persist_verify_status({
+            "state": "running",
+            "disc_code": args.disc_code,
+            "progress_percent": None,
+            "started_at": datetime.now(UTC).isoformat(),
+            "finished_at": None,
+            "message": f"Verify wystartowalo dla {args.disc_code}. Czekam na zamontowanie plyty przez system.",
+        })
+        try:
+            result = mount_and_verify_disc(conn, settings, args.disc_code)
+            payload = load_status_payload(status_file, settings)
+            current = payload.get("verify_status", {})
+            persist_verify_status({
+                "state": "verified",
+                "disc_code": result.disc_code,
+                "progress_percent": 100.0,
+                "started_at": current.get("started_at"),
+                "finished_at": datetime.now(UTC).isoformat(),
+                "message": f"Verify zakonczone dla {result.disc_code}.",
+            })
+            send_notification(settings, "Archiver: verify complete", f"{result.disc_code} verified successfully")
+            print(f"Verified {result.disc_code}: {result.checked_files} files")
+            return
+        except Exception as exc:
+            payload = load_status_payload(status_file, settings)
+            current = payload.get("verify_status", {})
+            persist_verify_status({
+                "state": "verify_failed",
+                "disc_code": args.disc_code,
+                "progress_percent": current.get("progress_percent"),
+                "started_at": current.get("started_at"),
+                "finished_at": datetime.now(UTC).isoformat(),
+                "message": str(exc),
+            })
+            logger.exception("background verify worker failed")
+            raise
 
     if args.command == "web":
         app = create_app(conn, settings)
