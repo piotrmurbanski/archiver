@@ -623,7 +623,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "progress_percent": None,
             "started_at": datetime.now(UTC).isoformat(),
             "finished_at": None,
-            "message": f"Verify wystartowalo przez {trigger}. Wsun plyte i poczekaj na automatyczny mount systemu.",
+            "message": f"Verify wystartowalo przez {trigger}. Wsun plyte, aplikacja odczyta ja bezposrednio z napedu.",
         })
         command = [
             "systemd-run",

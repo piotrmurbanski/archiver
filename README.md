@@ -150,8 +150,7 @@ scan -> plan -> approve -> stage
 Celowo zatrzymuje sie przed `burn`.
 
 W praktyce `burn` domyslnie konczy sie po nagraniu. `verify` uruchamiasz osobno po ponownym wsunieciu plyty albo z przycisku w GUI.
-Po kliknieciu `Zweryfikuj ponownie` aplikacja czeka jeszcze przez `ARCHIVER_VERIFY_MOUNT_WAIT_SECONDS`,
-czy system sam zamontuje plyte po jej wsunieciu.
+Krok `verify` odczytuje pliki bezposrednio z napedu, bez recznego mountowania plyty.
 
 Przygotowanie stagingu:
 

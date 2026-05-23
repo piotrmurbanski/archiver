@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import sqlite3
@@ -10,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from .config import Settings
 from .db import transaction
@@ -18,6 +20,7 @@ from .hashing import hash_file
 logger = logging.getLogger(__name__)
 StageProgressCallback = Callable[[str, int, int], None]
 BurnProgressCallback = Callable[[str, str, float | None], None]
+VerifyProgressCallback = Callable[[str, int, int], None]
 _MEDIA_BLOCKS_PATTERN = re.compile(
     r"Media blocks\s*:\s*\d+\s+readable\s*,\s*(\d+)\s+writable\s*,\s*(\d+)\s+overall",
     re.IGNORECASE,
@@ -350,6 +353,77 @@ def _mounted_device_path(device: str) -> Path | None:
     return None
 
 
+def _extract_iso_file_to_path(optical_device: str, iso_rr_path: str, dest_path: Path) -> None:
+    xorriso = _require_xorriso()
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [
+            xorriso,
+            "-osirrox",
+            "on",
+            "-indev",
+            optical_device,
+            "-extract",
+            iso_rr_path,
+            str(dest_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        error_text = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+        raise RuntimeError(f"Unable to read {iso_rr_path} from disc: {error_text or result.returncode}")
+
+
+def _verify_disc_from_device(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    disc_code: str,
+    progress_callback: VerifyProgressCallback | None = None,
+) -> VerifyResult:
+    if not settings.optical_device:
+        raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
+
+    disc = _disc_row(conn, disc_code)
+    files = _disc_files(conn, disc["id"])
+    logger.info("verify from device started for %s using %s", disc_code, settings.optical_device)
+
+    with TemporaryDirectory(prefix=f"archiver-verify-{disc_code.lower()}-") as temp_root_str:
+        temp_root = Path(temp_root_str)
+
+        for index, row in enumerate(files, start=1):
+            iso_rr_path = "/" + row["relative_path_on_disc"].replace(os.sep, "/").lstrip("/")
+            extracted_path = temp_root / row["relative_path_on_disc"]
+            _extract_iso_file_to_path(settings.optical_device, iso_rr_path, extracted_path)
+            actual_hash = hash_file(extracted_path)
+            if actual_hash != row["content_hash"]:
+                raise RuntimeError(f"Hash mismatch for {row['relative_path_on_disc']}")
+            if progress_callback is not None:
+                progress_callback(disc_code, index, len(files))
+
+        for index_name in (f"{disc_code}.csv", f"{disc_code}.json"):
+            _extract_iso_file_to_path(
+                settings.optical_device,
+                f"/index/{index_name}",
+                temp_root / "index" / index_name,
+            )
+
+    now = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute("UPDATE discs SET status = 'verified', updated_at = ? WHERE id = ?", (now, disc["id"]))
+        conn.execute(
+            "UPDATE files SET status = 'verified', archived_at = ?, changed_after_archive = 0 WHERE disc_id = ?",
+            (now, disc["id"]),
+        )
+    stage_dir = settings.staging_dir / disc_code
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+        logger.info("removed staging directory after verify: %s", stage_dir)
+    logger.info("verify from device completed for %s (%d files)", disc_code, len(files))
+    return VerifyResult(disc_code=disc_code, checked_files=len(files))
+
+
 def _mount_optical_disc(settings: Settings) -> Path:
     if not settings.optical_device:
         raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
@@ -452,19 +526,18 @@ def _attempt_auto_verify(conn: sqlite3.Connection, settings: Settings, disc_code
 
 
 def mount_and_verify_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> VerifyResult:
-    if not settings.optical_device:
-        raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
+    last_error: Exception | None = None
     for attempt in range(settings.verify_mount_wait_seconds + 1):
-        mounted_path = _mounted_device_path(settings.optical_device)
-        if mounted_path is not None:
-            logger.info("using mounted optical disc at %s", mounted_path)
-            return verify_disc(conn, settings, disc_code, mount_path=mounted_path)
-        if attempt < settings.verify_mount_wait_seconds:
-            time.sleep(1)
+        try:
+            return _verify_disc_from_device(conn, settings, disc_code)
+        except Exception as exc:
+            last_error = exc
+            if attempt < settings.verify_mount_wait_seconds:
+                time.sleep(1)
     raise RuntimeError(
-        "Plyta nie zostala automatycznie zamontowana po wsunieciu. "
-        "Wsunc plyte, odczekaj chwile i kliknij 'Zweryfikuj ponownie' jeszcze raz."
-    )
+        "Nie udalo sie odczytac plyty do verify. "
+        f"Ostatni blad: {last_error}"
+    ) from last_error
 
 
 def auto_mount_and_verify_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> VerifyResult:

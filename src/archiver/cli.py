@@ -220,7 +220,7 @@ def main() -> None:
             "progress_percent": None,
             "started_at": datetime.now(UTC).isoformat(),
             "finished_at": None,
-            "message": f"Verify wystartowalo dla {args.disc_code}. Czekam na zamontowanie plyty przez system.",
+            "message": f"Verify wystartowalo dla {args.disc_code}. Odczytuje pliki bezposrednio z plyty.",
         })
         try:
             result = mount_and_verify_disc(conn, settings, args.disc_code)
