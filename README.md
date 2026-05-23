@@ -38,6 +38,7 @@ ARCHIVER_DB_PATH=/home/piotr/sandbox/archiver/data/archive.db
 ARCHIVER_ROOTS=/mnt/NASz
 ARCHIVER_MANIFESTS_DIR=/home/piotr/sandbox/archiver/manifests
 ARCHIVER_DISC_SIZE_GB=100
+ARCHIVER_TEST_DISC_SIZE_GB=
 ARCHIVER_FILL_RATIO=0.93
 ARCHIVER_WEB_HOST=0.0.0.0
 ARCHIVER_WEB_PORT=8765
@@ -50,6 +51,13 @@ ARCHIVER_LOG_LEVEL=INFO
 ```
 
 `ARCHIVER_FILL_RATIO=0.93` oznacza planowanie paczek do 93 GiB netto dla plyty 100 GB.
+Jesli chcesz testowac workflow na tanszych, mniejszych nosnikach, ustaw:
+
+```bash
+ARCHIVER_TEST_DISC_SIZE_GB=25
+```
+
+Wtedy planowanie bedzie liczone pod mniejsza plyte testowa, bez zmiany docelowego `ARCHIVER_DISC_SIZE_GB=100`.
 Przy `plan` powstaja pliki `manifests/DISC-XXXX.csv` i `manifests/DISC-XXXX.json`.
 CSV ma sluzyc jako prosty indeks do przeszukiwania po sciezkach i nazwach plikow.
 CSV jest celowo uproszczony i zawiera tylko najwazniejsze kolumny do przegladania:
@@ -185,6 +193,13 @@ ARCHIVER_VERIFY_MOUNT=/mnt/archiver-disc
 ARCHIVER_STAGING_DIR=/home/piotr/sandbox/archiver/staging
 ARCHIVER_ISO_DIR=/home/piotr/sandbox/archiver/iso
 ```
+
+Przed startem `growisofs` narzedzie:
+- buduje ISO
+- sprawdza, czy obraz miesci sie na wlozonym nosniku
+- zapisuje diagnostyke napedu i nosnika (`xorriso -toc`, `dvd+rw-mediainfo`)
+
+Jesli `growisofs` wypisze komunikaty typu `Input/output error`, `write failed` albo `FLUSH CACHE failed`, burn zostanie oznaczony jako `burn_failed`, nawet jesli proces zwroci kod `0`.
 
 `verify` oznacza pliki jako `verified` dopiero po zgodnosci hashy z zawartoscia plyty.
 Po udanym `verify` katalog `staging/DISC-XXXX/` jest automatycznie usuwany.

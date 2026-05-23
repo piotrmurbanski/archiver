@@ -26,6 +26,8 @@ class Settings:
     iso_dir: Path
     log_dir: Path
     disc_size_bytes: int
+    normal_disc_size_bytes: int
+    test_disc_size_bytes: int | None
     fill_ratio: float
     web_host: str
     web_port: int
@@ -46,6 +48,14 @@ class Settings:
     def planning_limit_bytes(self) -> int:
         return int(self.disc_size_bytes * self.fill_ratio)
 
+    @property
+    def test_mode(self) -> bool:
+        return self.test_disc_size_bytes is not None
+
+    @property
+    def effective_disc_size_gib(self) -> float:
+        return self.disc_size_bytes / 1024**3
+
 
 def load_settings() -> Settings:
     _load_dotenv()
@@ -57,6 +67,8 @@ def load_settings() -> Settings:
     iso_dir = Path(os.environ.get("ARCHIVER_ISO_DIR", "./iso")).expanduser()
     log_dir = Path(os.environ.get("ARCHIVER_LOG_DIR", "./logs")).expanduser()
     disc_size_gb = int(os.environ.get("ARCHIVER_DISC_SIZE_GB", "100"))
+    test_disc_size_gb_env = os.environ.get("ARCHIVER_TEST_DISC_SIZE_GB")
+    test_disc_size_bytes = int(test_disc_size_gb_env) * 1024**3 if test_disc_size_gb_env else None
     fill_ratio = float(os.environ.get("ARCHIVER_FILL_RATIO", "0.93"))
     web_host = os.environ.get("ARCHIVER_WEB_HOST", "127.0.0.1")
     web_port = int(os.environ.get("ARCHIVER_WEB_PORT", "8765"))
@@ -79,7 +91,9 @@ def load_settings() -> Settings:
         staging_dir=staging_dir,
         iso_dir=iso_dir,
         log_dir=log_dir,
-        disc_size_bytes=disc_size_gb * 1024**3,
+        disc_size_bytes=test_disc_size_bytes or (disc_size_gb * 1024**3),
+        normal_disc_size_bytes=disc_size_gb * 1024**3,
+        test_disc_size_bytes=test_disc_size_bytes,
         fill_ratio=fill_ratio,
         web_host=web_host,
         web_port=web_port,

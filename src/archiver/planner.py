@@ -306,10 +306,10 @@ def replan_disc(
     if disc is None:
         raise ValueError(f"Disc not found: {disc_code}")
 
-    if disc["status"] not in {"planned", "approved", "staged"}:
+    if disc["status"] not in {"planned", "approved", "staged", "burn_failed"}:
         raise ValueError(
             f"Disc {disc_code} cannot be replanned from status {disc['status']}. "
-            "Only planned, approved, and staged discs can be replanned."
+            "Only planned, approved, staged, and burn_failed discs can be replanned."
         )
 
     logger.info("replanning disc %s from status %s", disc_code, disc["status"])

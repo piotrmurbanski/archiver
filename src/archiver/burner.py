@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -16,6 +17,18 @@ from .hashing import hash_file
 
 logger = logging.getLogger(__name__)
 StageProgressCallback = Callable[[str, int, int], None]
+BurnProgressCallback = Callable[[str, str, float | None], None]
+_MEDIA_BLOCKS_PATTERN = re.compile(
+    r"Media blocks\s*:\s*\d+\s+readable\s*,\s*(\d+)\s+writable\s*,\s*(\d+)\s+overall",
+    re.IGNORECASE,
+)
+_GROWISOFS_FATAL_MARKERS = (
+    "unable to write@lba",
+    "write failed",
+    "input/output error",
+    "flush cache failed",
+    "reset occurred",
+)
 
 
 @dataclass(slots=True)
@@ -187,11 +200,112 @@ def _require_growisofs() -> str:
     return binary
 
 
+def _probe_optical_writable_bytes(settings: Settings) -> int:
+    if not settings.optical_device:
+        raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
+    xorriso = _require_xorriso()
+    result = subprocess.run(
+        [xorriso, "-outdev", settings.optical_device, "-toc"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+    if result.returncode != 0:
+        raise RuntimeError(f"Unable to probe optical media capacity: {output or result.returncode}")
+    match = _MEDIA_BLOCKS_PATTERN.search(output)
+    if match is None:
+        raise RuntimeError(f"Unable to parse optical media capacity from xorriso output: {output}")
+    writable_blocks = int(match.group(1))
+    writable_bytes = writable_blocks * 2048
+    logger.info(
+        "optical media capacity probe: device=%s writable_blocks=%d writable_bytes=%s",
+        settings.optical_device,
+        writable_blocks,
+        _format_bytes(writable_bytes),
+    )
+    return writable_bytes
+
+
+def _ensure_iso_fits_optical_media(settings: Settings, disc_code: str, iso_path: Path) -> None:
+    iso_size = iso_path.stat().st_size
+    writable_bytes = _probe_optical_writable_bytes(settings)
+    if iso_size > writable_bytes:
+        logger.error(
+            "iso too large for optical media: disc=%s iso=%s media=%s path=%s",
+            disc_code,
+            _format_bytes(iso_size),
+            _format_bytes(writable_bytes),
+            iso_path,
+        )
+        raise RuntimeError(
+            f"ISO for {disc_code} does not fit on the inserted disc: "
+            f"image size {_format_bytes(iso_size)}, media capacity {_format_bytes(writable_bytes)}"
+        )
+    logger.info(
+        "iso fits optical media: disc=%s iso=%s media=%s",
+        disc_code,
+        _format_bytes(iso_size),
+        _format_bytes(writable_bytes),
+    )
+
+
 def _log_subprocess_output(prefix: str, result: subprocess.CompletedProcess[str]) -> None:
     if result.stdout:
         logger.info("%s stdout:\n%s", prefix, result.stdout.strip())
     if result.stderr:
         logger.info("%s stderr:\n%s", prefix, result.stderr.strip())
+
+
+def _growisofs_output_has_failure(output_lines: list[str]) -> str | None:
+    for line in output_lines:
+        lowered = line.lower()
+        for marker in _GROWISOFS_FATAL_MARKERS:
+            if marker in lowered:
+                return line
+    return None
+
+
+def _log_optical_diagnostics(settings: Settings, context: str) -> None:
+    if not settings.optical_device:
+        return
+    xorriso = shutil.which("xorriso")
+    if xorriso is not None:
+        result = subprocess.run(
+            [xorriso, "-outdev", settings.optical_device, "-toc"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+        if output:
+            logger.info("optical diagnostics (%s) xorriso:\n%s", context, output)
+    mediainfo = shutil.which("dvd+rw-mediainfo")
+    if mediainfo is not None:
+        result = subprocess.run(
+            [mediainfo, settings.optical_device],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+        if output:
+            logger.info("optical diagnostics (%s) dvd+rw-mediainfo:\n%s", context, output)
+
+
+_PERCENT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%\s+done", re.IGNORECASE)
+
+
+def _report_burn_progress(
+    progress_callback: BurnProgressCallback | None,
+    disc_code: str,
+    message: str,
+) -> None:
+    if progress_callback is None:
+        return
+    match = _PERCENT_PATTERN.search(message)
+    progress_percent = float(match.group(1)) if match else None
+    progress_callback(disc_code, message, progress_percent)
 
 
 def _mounted_device_path(device: str) -> Path | None:
@@ -238,10 +352,13 @@ def _mount_optical_disc(settings: Settings) -> Path:
                 if mount_path.exists():
                     logger.info("disc mounted at %s", mount_path)
                     return mount_path
-            mounted_path = _mounted_device_path(settings.optical_device)
-            if mounted_path is not None:
-                logger.info("disc already mounted at %s", mounted_path)
-                return mounted_path
+            for _ in range(5):
+                mounted_path = _mounted_device_path(settings.optical_device)
+                if mounted_path is not None:
+                    logger.info("disc already mounted at %s", mounted_path)
+                    return mounted_path
+                time.sleep(1)
+            raise RuntimeError(f"udisksctl reported success but mount path was not detected: {text.strip()}")
         else:
             error_text = ((result.stdout or "") + (result.stderr or "")).strip()
             if error_text and "already mounted" in error_text.lower():
@@ -341,33 +458,61 @@ def create_iso(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> 
     return iso_path
 
 
-def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> BurnResult:
+def burn_disc(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    disc_code: str,
+    progress_callback: BurnProgressCallback | None = None,
+) -> BurnResult:
     disc = _disc_row(conn, disc_code)
     if not settings.optical_device:
         raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
     iso_path = create_iso(conn, settings, disc_code)
+    _ensure_iso_fits_optical_media(settings, disc_code, iso_path)
     growisofs = _require_growisofs()
     now = datetime.now(UTC).isoformat()
+    _log_optical_diagnostics(settings, f"before burn {disc_code}")
     logger.info("burn started for %s using device %s", disc_code, settings.optical_device)
+    _report_burn_progress(progress_callback, disc_code, f"Nagrywanie wystartowalo dla {disc_code}.")
     with transaction(conn):
         conn.execute("UPDATE discs SET status = 'burning', updated_at = ? WHERE id = ?", (now, disc["id"]))
         conn.execute("UPDATE files SET status = 'burning' WHERE disc_id = ?", (disc["id"],))
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [
                 growisofs,
                 "-dvd-compat",
                 "-Z",
                 f"{settings.optical_device}={iso_path}",
             ],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            check=True,
+            bufsize=1,
         )
-        _log_subprocess_output(f"growisofs burn for {disc_code}", result)
+        output_lines: list[str] = []
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.rstrip()
+            if not line:
+                continue
+            output_lines.append(line)
+            logger.info("growisofs burn for %s: %s", disc_code, line)
+            _report_burn_progress(progress_callback, disc_code, line)
+        return_code = process.wait()
+        fatal_line = _growisofs_output_has_failure(output_lines)
+        if return_code != 0 or fatal_line is not None:
+            raise subprocess.CalledProcessError(
+                return_code if return_code != 0 else 1,
+                process.args,
+                output="\n".join(output_lines),
+                stderr="",
+            )
     except subprocess.CalledProcessError as exc:
         _log_subprocess_output(f"growisofs burn for {disc_code}", exc)
+        _log_optical_diagnostics(settings, f"after failed burn {disc_code}")
         logger.exception("burn failed for %s", disc_code)
+        _report_burn_progress(progress_callback, disc_code, f"Nagrywanie nie powiodlo sie: {exc}")
         failed_at = datetime.now(UTC).isoformat()
         with transaction(conn):
             conn.execute("UPDATE discs SET status = 'burn_failed', updated_at = ? WHERE id = ?", (failed_at, disc["id"]))
@@ -379,6 +524,7 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
         raise RuntimeError(f"growisofs failed for {disc_code}: {error_text or exc}") from exc
     burned_at = datetime.now(UTC).isoformat()
     logger.info("burn completed for %s", disc_code)
+    _report_burn_progress(progress_callback, disc_code, f"Nagrywanie zakonczone dla {disc_code}. Start verify.")
     with transaction(conn):
         conn.execute("UPDATE discs SET status = 'burned', updated_at = ? WHERE id = ?", (burned_at, disc["id"]))
         conn.execute("UPDATE files SET status = 'burned' WHERE disc_id = ?", (disc["id"],))
@@ -390,6 +536,7 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
             verified = True
             verify_error = None
             logger.info("automatic verify completed for %s", disc_code)
+            _report_burn_progress(progress_callback, disc_code, f"Verify zakonczone dla {disc_code}.")
         except Exception as exc:
             failed_at = datetime.now(UTC).isoformat()
             with transaction(conn):
@@ -399,6 +546,7 @@ def burn_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str) -> B
                 )
             verify_error = str(exc)
             logger.warning("automatic verify failed for %s: %s", disc_code, exc)
+            _report_burn_progress(progress_callback, disc_code, f"Verify nie powiodlo sie: {exc}")
     else:
         verify_error = None
     return BurnResult(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 import uvicorn
@@ -13,6 +14,7 @@ from .logging_setup import configure_logging
 from .notifier import send_notification
 from .planner import approve_disc, plan_disc
 from .repository import status_summary
+from .status_store import load_status_payload, save_status_payload
 from .workflow import run_scan_cycle
 from .web import create_app
 
@@ -42,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     stage.add_argument("disc_code")
     burn = subparsers.add_parser("burn")
     burn.add_argument("disc_code")
+    burn_worker = subparsers.add_parser("burn-worker")
+    burn_worker.add_argument("disc_code")
     verify = subparsers.add_parser("verify")
     verify.add_argument("disc_code")
     verify.add_argument("--mount-path", default=None)
@@ -126,6 +130,72 @@ def main() -> None:
             if settings.auto_verify:
                 print(f"Automatic verify did not complete: {result.verify_error or 'unknown reason'}")
         return
+
+    if args.command == "burn-worker":
+        status_file = settings.db_path.parent / "web-status.json"
+
+        def persist_burn_status(status: dict[str, object]) -> None:
+            payload = load_status_payload(status_file, settings)
+            payload["burn_status"] = status
+            save_status_payload(status_file, payload)
+
+        persist_burn_status({
+            "state": "running",
+            "disc_code": args.disc_code,
+            "progress_percent": None,
+            "started_at": datetime.now(UTC).isoformat(),
+            "finished_at": None,
+            "message": f"Nagrywanie wystartowalo dla {args.disc_code}.",
+        })
+
+        def burn_progress_callback(disc_code: str, message: str, progress_percent: float | None) -> None:
+            payload = load_status_payload(status_file, settings)
+            current = payload.get("burn_status", {})
+            persist_burn_status({
+                "state": "running",
+                "disc_code": disc_code,
+                "progress_percent": progress_percent,
+                "started_at": current.get("started_at"),
+                "finished_at": None,
+                "message": message,
+            })
+
+        try:
+            result = burn_disc(conn, settings, args.disc_code, progress_callback=burn_progress_callback)
+            final_state = "verified" if result.verified else "completed"
+            final_message = (
+                f"Nagrywanie i verify zakonczone dla {result.disc_code}."
+                if result.verified
+                else f"Nagrywanie zakonczone dla {result.disc_code}. Verify: {result.verify_error or 'oczekuje'}"
+            )
+            payload = load_status_payload(status_file, settings)
+            current = payload.get("burn_status", {})
+            persist_burn_status({
+                "state": final_state,
+                "disc_code": result.disc_code,
+                "progress_percent": 100.0,
+                "started_at": current.get("started_at"),
+                "finished_at": datetime.now(UTC).isoformat(),
+                "message": final_message,
+            })
+            if result.verified:
+                send_notification(settings, "Archiver: burn and verify complete", f"{result.disc_code} verified successfully")
+            else:
+                send_notification(settings, "Archiver: burn complete", f"{result.disc_code} burned; verify pending")
+            return
+        except Exception as exc:
+            payload = load_status_payload(status_file, settings)
+            current = payload.get("burn_status", {})
+            persist_burn_status({
+                "state": "failed",
+                "disc_code": args.disc_code,
+                "progress_percent": current.get("progress_percent"),
+                "started_at": current.get("started_at"),
+                "finished_at": datetime.now(UTC).isoformat(),
+                "message": str(exc),
+            })
+            logger.exception("background burn worker failed")
+            raise
 
     if args.command == "verify":
         mount_path = Path(args.mount_path) if args.mount_path else None

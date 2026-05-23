@@ -128,6 +128,9 @@
       <p class="subtitle">
         Archiwizacja na M-Disc. Limit planowania:
         <code>{{ (settings.planning_limit_bytes / 1024 / 1024 / 1024) | round(2) }} GiB</code>
+        {% if settings.test_mode %}
+          <span class="warn">Tryb testowy: planowanie pod {{ settings.effective_disc_size_gib | round(0) }} GB zamiast {{ (settings.normal_disc_size_bytes / 1024 / 1024 / 1024) | round(0) }} GB.</span>
+        {% endif %}
         {% if auto_refresh %}
           <span class="muted">Strona odświeża się automatycznie co {{ auto_refresh_seconds }} s.</span>
         {% endif %}
@@ -187,7 +190,7 @@
               Rozmiar: {{ (summary.planned_disc["planned_bytes"] / 1024 / 1024 / 1024) | round(2) }} GiB
             </p>
             <div class="actions">
-              {% if summary.planned_disc["status"] in ["planned", "approved", "staged"] %}
+              {% if summary.planned_disc["status"] in ["planned", "approved", "staged", "burn_failed"] %}
                 <form method="post" action="/replan">
                   <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
                   <button type="submit" class="secondary">Zaplanuj jeszcze raz</button>
@@ -280,13 +283,21 @@
         </article>
 
         <article class="card">
-          <h2>4. Przygotowanie do nagrania</h2>
+          <h2>4. Nagrywanie i verify</h2>
+          <div class="progress-big">
+            {% if burn_status["progress_percent"] is not none %}
+              {{ burn_status["progress_percent"] | round(1) }}%
+            {% else %}
+              -
+            {% endif %}
+          </div>
           <p>
-            Stan: <strong>{{ prepare_status["state"] }}</strong><br>
-            Start: {{ prepare_status["started_at"] or "-" }}<br>
-            Koniec: {{ prepare_status["finished_at"] or "-" }}
+            Stan: <strong>{{ burn_status["state"] }}</strong><br>
+            Płyta: {{ burn_status["disc_code"] or "-" }}<br>
+            Start: {{ burn_status["started_at"] or "-" }}<br>
+            Koniec: {{ burn_status["finished_at"] or "-" }}
           </p>
-          <p class="muted" style="white-space: pre-wrap;">{{ prepare_status["message"] }}</p>
+          <p class="muted" style="white-space: pre-wrap;">{{ burn_status["message"] }}</p>
         </article>
       </section>
 
@@ -351,13 +362,19 @@
           <summary>Źródła archiwizacji</summary>
           <div style="margin-top: 14px;" class="stack">
             <div class="grid">
-              {% for root, available in root_checks %}
+              {% for item in root_checks %}
                 <article class="card" style="box-shadow:none;">
                   <div class="muted">Źródło</div>
-                  <div style="font-size: 1rem;"><strong>{{ root.split('/')[-1] }}</strong></div>
-                  <div class="muted">{{ root }}</div>
-                  <div class="{{ 'muted' if available else 'warn' }}">
-                    {{ 'online' if available else 'offline' }}
+                  <div style="font-size: 1rem;"><strong>{{ item["root"].split('/')[-1] }}</strong></div>
+                  <div class="muted">{{ item["root"] }}</div>
+                  <div class="{{ 'muted' if item['available'] is not false else 'warn' }}">
+                    {% if item["available"] is true %}
+                      online
+                    {% elif item["available"] is false %}
+                      offline
+                    {% else %}
+                      nie sprawdzono
+                    {% endif %}
                   </div>
                 </article>
               {% endfor %}
