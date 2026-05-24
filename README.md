@@ -180,6 +180,7 @@ Celowo zatrzymuje sie przed `burn`.
 W praktyce `burn` domyslnie konczy sie po nagraniu. `verify` uruchamiasz osobno po ponownym wsunieciu plyty albo z przycisku w GUI.
 Krok `verify` odczytuje dane bezposrednio z napedu, bez recznego mountowania plyty.
 Jesli lokalny plik `iso/DISC-XXXX.iso` nadal istnieje, verify z napedu najpierw porownuje cala plyte sekwencyjnie z obrazem ISO, co jest duzo szybsze niz sprawdzanie kazdego pliku osobno. Fallback do trybu plik-po-pliku zostaje tylko na wypadek braku lokalnego ISO.
+W GUI dostepny jest tez osobny przycisk `Speed verify`. Ten tryb nie zapisuje wyciaganych plikow tymczasowych na dysku: jesli nie ma lokalnego ISO, liczy hashe strumieniowo bezposrednio z plyty.
 
 Przygotowanie stagingu:
 

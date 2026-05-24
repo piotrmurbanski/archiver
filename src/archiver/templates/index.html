@@ -198,6 +198,14 @@
                 {% endif %}
                 <button type="submit" {% if wizard.disabled %}disabled{% endif %}>{{ wizard.action_label }}</button>
               </form>
+              {% for secondary_action in wizard.secondary_actions %}
+                <form method="post" action="{{ secondary_action.path }}">
+                  {% if secondary_action.disc_code %}
+                    <input type="hidden" name="disc_code" value="{{ secondary_action.disc_code }}">
+                  {% endif %}
+                  <button type="submit" class="secondary" {% if wizard.disabled %}disabled{% endif %}>{{ secondary_action.label }}</button>
+                </form>
+              {% endfor %}
             </div>
           {% else %}
             <p class="muted">Brak dostępnego następnego kroku.</p>
@@ -340,6 +348,7 @@
               <th>Zakres</th>
               <th>Rozmiar</th>
               <th>Pliki</th>
+              <th>Akcje</th>
             </tr>
           </thead>
           <tbody>
@@ -350,6 +359,22 @@
                 <td>{{ disc["date_from"][:7] if disc["date_from"] else "-" }} .. {{ disc["date_to"][:7] if disc["date_to"] else "-" }}</td>
                 <td>{{ (disc["planned_bytes"] / 1024 / 1024 / 1024) | round(2) }} GiB</td>
                 <td>{{ disc["file_count"] }}</td>
+                <td>
+                  {% if disc["status"] in ["verified", "burned", "verify_failed"] %}
+                    <div class="actions" style="margin-top: 0;">
+                      <form method="post" action="/verify">
+                        <input type="hidden" name="disc_code" value="{{ disc['disc_code'] }}">
+                        <button type="submit" class="secondary" {% if workflow_busy %}disabled{% endif %}>Test ISO</button>
+                      </form>
+                      <form method="post" action="/speed-verify">
+                        <input type="hidden" name="disc_code" value="{{ disc['disc_code'] }}">
+                        <button type="submit" class="secondary" {% if workflow_busy %}disabled{% endif %}>Test plik po pliku</button>
+                      </form>
+                    </div>
+                  {% else %}
+                    <span class="muted">-</span>
+                  {% endif %}
+                </td>
               </tr>
             {% endfor %}
           </tbody>

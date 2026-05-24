@@ -8,7 +8,7 @@ from pathlib import Path
 
 import uvicorn
 
-from .burner import burn_disc, stage_disc, verify_disc, verify_disc_from_device
+from .burner import burn_disc, speed_verify_disc_from_device, stage_disc, verify_disc, verify_disc_from_device
 from .config import load_settings
 from .db import connect, init_db
 from .logging_setup import configure_logging
@@ -85,9 +85,13 @@ def build_parser() -> argparse.ArgumentParser:
     burn_worker.add_argument("disc_code")
     verify_worker = subparsers.add_parser("verify-worker")
     verify_worker.add_argument("disc_code")
+    speed_verify_worker = subparsers.add_parser("speed-verify-worker")
+    speed_verify_worker.add_argument("disc_code")
     verify = subparsers.add_parser("verify")
     verify.add_argument("disc_code")
     verify.add_argument("--mount-path", default=None)
+    speed_verify = subparsers.add_parser("speed-verify")
+    speed_verify.add_argument("disc_code")
 
     approve = subparsers.add_parser("approve")
     approve.add_argument("disc_code")
@@ -259,6 +263,15 @@ def main() -> None:
             print(f"Database backup created at {backup_path}")
         return
 
+    if args.command == "speed-verify":
+        result = speed_verify_disc_from_device(conn, settings, args.disc_code)
+        backup_path = _auto_backup_after_verify(conn, settings, result.disc_code)
+        send_notification(settings, "Archiver: speed verify complete", f"{result.disc_code} verified successfully")
+        print(f"Speed-verified {result.disc_code}: {result.checked_files} files")
+        if backup_path is not None:
+            print(f"Database backup created at {backup_path}")
+        return
+
     if args.command == "verify-worker":
         status_file = settings.db_path.parent / "web-status.json"
         verify_progress_step = 10
@@ -276,7 +289,7 @@ def main() -> None:
             "total_files": 0,
             "started_at": datetime.now(UTC).isoformat(),
             "finished_at": None,
-            "message": f"Verify wystartowalo dla {args.disc_code}. Odczytuje pliki bezposrednio z plyty.",
+            "message": f"Test ISO wystartowal dla {args.disc_code}. Odczytuje dane bezposrednio z plyty.",
         })
 
         def verify_progress_callback(disc_code: str, verified_files: int, total_files: int) -> None:
@@ -293,7 +306,7 @@ def main() -> None:
                 "total_files": total_files,
                 "started_at": current.get("started_at"),
                 "finished_at": None,
-                "message": f"Verify {disc_code}: {verified_files}/{total_files}",
+                "message": f"Test ISO {disc_code}: {verified_files}/{total_files}",
             })
         try:
             result = verify_disc_from_device(conn, settings, args.disc_code, progress_callback=verify_progress_callback)
@@ -309,9 +322,9 @@ def main() -> None:
                 "started_at": current.get("started_at"),
                 "finished_at": datetime.now(UTC).isoformat(),
                 "message": (
-                    f"Verify zakonczone dla {result.disc_code}. Backup: {backup_path.name}"
+                    f"Test ISO zakonczony dla {result.disc_code}. Backup: {backup_path.name}"
                     if backup_path is not None
-                    else f"Verify zakonczone dla {result.disc_code}."
+                    else f"Test ISO zakonczony dla {result.disc_code}."
                 ),
             })
             send_notification(settings, "Archiver: verify complete", f"{result.disc_code} verified successfully")
@@ -333,6 +346,91 @@ def main() -> None:
                 "message": str(exc),
             })
             logger.exception("background verify worker failed")
+            raise
+
+    if args.command == "speed-verify-worker":
+        status_file = settings.db_path.parent / "web-status.json"
+        verify_progress_step = 10
+
+        def persist_verify_status(status: dict[str, object]) -> None:
+            payload = load_status_payload(status_file, settings)
+            payload["verify_status"] = status
+            save_status_payload(status_file, payload)
+
+        persist_verify_status({
+            "state": "running",
+            "disc_code": args.disc_code,
+            "progress_percent": None,
+            "verified_files": 0,
+            "total_files": 0,
+            "started_at": datetime.now(UTC).isoformat(),
+            "finished_at": None,
+            "message": (
+                f"Test plik po pliku wystartowal dla {args.disc_code}. "
+                "Liczy hashe bez zapisywania plikow tymczasowych na dysku."
+            ),
+        })
+
+        def verify_progress_callback(disc_code: str, verified_files: int, total_files: int) -> None:
+            if verified_files % verify_progress_step != 0 and verified_files != total_files:
+                return
+            payload = load_status_payload(status_file, settings)
+            current = payload.get("verify_status", {})
+            progress_percent = (verified_files / total_files * 100.0) if total_files else None
+            persist_verify_status({
+                "state": "running",
+                "disc_code": disc_code,
+                "progress_percent": progress_percent,
+                "verified_files": verified_files,
+                "total_files": total_files,
+                "started_at": current.get("started_at"),
+                "finished_at": None,
+                "message": f"Test plik po pliku {disc_code}: {verified_files}/{total_files}",
+            })
+
+        try:
+            result = speed_verify_disc_from_device(
+                conn,
+                settings,
+                args.disc_code,
+                progress_callback=verify_progress_callback,
+            )
+            backup_path = _auto_backup_after_verify(conn, settings, result.disc_code)
+            payload = load_status_payload(status_file, settings)
+            current = payload.get("verify_status", {})
+            persist_verify_status({
+                "state": "verified",
+                "disc_code": result.disc_code,
+                "progress_percent": 100.0,
+                "verified_files": result.checked_files,
+                "total_files": result.checked_files,
+                "started_at": current.get("started_at"),
+                "finished_at": datetime.now(UTC).isoformat(),
+                "message": (
+                    f"Test plik po pliku zakonczony dla {result.disc_code}. Backup: {backup_path.name}"
+                    if backup_path is not None
+                    else f"Test plik po pliku zakonczony dla {result.disc_code}."
+                ),
+            })
+            send_notification(settings, "Archiver: speed verify complete", f"{result.disc_code} verified successfully")
+            print(f"Speed-verified {result.disc_code}: {result.checked_files} files")
+            if backup_path is not None:
+                print(f"Database backup created at {backup_path}")
+            return
+        except Exception as exc:
+            payload = load_status_payload(status_file, settings)
+            current = payload.get("verify_status", {})
+            persist_verify_status({
+                "state": "verify_failed",
+                "disc_code": args.disc_code,
+                "progress_percent": current.get("progress_percent"),
+                "verified_files": current.get("verified_files", 0),
+                "total_files": current.get("total_files", 0),
+                "started_at": current.get("started_at"),
+                "finished_at": datetime.now(UTC).isoformat(),
+                "message": str(exc),
+            })
+            logger.exception("background speed verify worker failed")
             raise
 
     if args.command == "web":

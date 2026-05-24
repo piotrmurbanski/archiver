@@ -15,7 +15,7 @@ from tempfile import TemporaryDirectory
 
 from .config import Settings
 from .db import transaction
-from .hashing import hash_file
+from .hashing import hash_file, hash_stream
 
 logger = logging.getLogger(__name__)
 StageProgressCallback = Callable[[str, int, int], None]
@@ -391,6 +391,41 @@ def _extract_iso_file_to_path(optical_device: str, iso_rr_path: str, dest_path: 
         raise RuntimeError(f"Unable to read {iso_rr_path} from disc: {error_text or result.returncode}")
 
 
+def _extract_iso_file_hash_from_device(optical_device: str, iso_rr_path: str) -> str:
+    xorriso = _require_xorriso()
+    with TemporaryDirectory(prefix="archiver-verify-stream-") as temp_root_str:
+        temp_root = Path(temp_root_str)
+        fifo_path = temp_root / "stream.fifo"
+        os.mkfifo(fifo_path)
+        process = subprocess.Popen(
+            [
+                xorriso,
+                "-osirrox",
+                "on",
+                "-indev",
+                optical_device,
+                "-extract",
+                iso_rr_path,
+                str(fifo_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            with fifo_path.open("rb", buffering=0) as handle:
+                actual_hash = hash_stream(handle)
+            stdout, stderr = process.communicate()
+        except Exception:
+            process.kill()
+            process.wait()
+            raise
+        if process.returncode != 0:
+            error_text = ((stdout or "") + "\n" + (stderr or "")).strip()
+            raise RuntimeError(f"Unable to stream-read {iso_rr_path} from disc: {error_text or process.returncode}")
+        return actual_hash
+
+
 def _compare_iso_with_device(
     iso_path: Path,
     device_path: str,
@@ -454,6 +489,7 @@ def _verify_disc_from_device(
     settings: Settings,
     disc_code: str,
     progress_callback: VerifyProgressCallback | None = None,
+    speed_mode: bool = False,
 ) -> VerifyResult:
     if not settings.optical_device:
         raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
@@ -461,6 +497,30 @@ def _verify_disc_from_device(
     disc = _disc_row(conn, disc_code)
     files = _disc_files(conn, disc["id"])
     logger.info("verify from device started for %s using %s", disc_code, settings.optical_device)
+
+    if speed_mode:
+        logger.info("using streaming file-level verify for %s without temporary files", disc_code)
+        for index, row in enumerate(files, start=1):
+            iso_rr_path = "/" + row["relative_path_on_disc"].replace(os.sep, "/").lstrip("/")
+            actual_hash = _extract_iso_file_hash_from_device(settings.optical_device, iso_rr_path)
+            if actual_hash != row["content_hash"]:
+                raise RuntimeError(f"Hash mismatch for {row['relative_path_on_disc']}")
+            if progress_callback is not None:
+                progress_callback(disc_code, index, len(files))
+
+        for index_name in (f"{disc_code}.csv", f"{disc_code}.json"):
+            manifest_path = settings.manifests_dir / index_name
+            expected_hash = hash_file(manifest_path)
+            actual_hash = _extract_iso_file_hash_from_device(
+                settings.optical_device,
+                f"/index/{index_name}",
+            )
+            if actual_hash != expected_hash:
+                raise RuntimeError(f"Hash mismatch for index/{index_name}")
+
+        _mark_disc_verified(conn, settings, disc["id"], disc_code)
+        logger.info("streaming verify from device completed for %s (%d files)", disc_code, len(files))
+        return VerifyResult(disc_code=disc_code, checked_files=len(files))
 
     iso_path = settings.iso_dir / f"{disc_code}.iso"
     if iso_path.exists():
@@ -789,3 +849,18 @@ def verify_disc_from_device(
     progress_callback: VerifyProgressCallback | None = None,
 ) -> VerifyResult:
     return _verify_disc_from_device(conn, settings, disc_code, progress_callback=progress_callback)
+
+
+def speed_verify_disc_from_device(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    disc_code: str,
+    progress_callback: VerifyProgressCallback | None = None,
+) -> VerifyResult:
+    return _verify_disc_from_device(
+        conn,
+        settings,
+        disc_code,
+        progress_callback=progress_callback,
+        speed_mode=True,
+    )

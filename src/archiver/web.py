@@ -618,13 +618,15 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             return False
         return True
 
-    def start_verify_job(trigger: str, disc_code: str) -> bool:
+    def start_verify_job(trigger: str, disc_code: str, speed: bool = False) -> bool:
         reload_status_snapshot()
         busy_message = workflow_busy_message()
         if busy_message is not None:
             set_verify_message(busy_message, disc_code)
             return False
-        unit_name = f"archiver-verify-{disc_code.lower()}"
+        unit_name = f"archiver-{'speed-verify' if speed else 'verify'}-{disc_code.lower()}"
+        action_label = "Test plik po pliku" if speed else "Test ISO"
+        worker_command = "speed-verify-worker" if speed else "verify-worker"
         update_verify_status({
             "state": "running",
             "disc_code": disc_code,
@@ -633,7 +635,14 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "total_files": 0,
             "started_at": datetime.now(UTC).isoformat(),
             "finished_at": None,
-            "message": f"Verify wystartowalo przez {trigger}. Wsun plyte, aplikacja odczyta ja bezposrednio z napedu.",
+            "message": (
+                f"{action_label} wystartowalo przez {trigger}. "
+                + (
+                    "Liczy hashe bez zapisywania plikow tymczasowych na dysku."
+                    if speed
+                    else "Wsun plyte, aplikacja odczyta ja bezposrednio z napedu."
+                )
+            ),
         })
         command = [
             "systemd-run",
@@ -643,7 +652,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "--collect",
             f"--working-directory={Path.cwd()}",
             str(Path.cwd() / ".venv/bin/archiver"),
-            "verify-worker",
+            worker_command,
             disc_code,
         ]
         result = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -703,6 +712,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "disabled": workflow_busy,
             "error": None,
             "hint": None,
+            "secondary_actions": [],
         }
         if app.state.plan_status["state"] == "failed" and disc is None:
             wizard.update({
@@ -735,13 +745,20 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                 })
             elif disc_status in {"burned", "verify_failed"}:
                 wizard.update({
-                    "description": f"{disc['disc_code']} czeka na verify.",
+                    "description": f"{disc['disc_code']} czeka na test poprawnosci nagrania.",
                     "action_path": "/verify",
-                    "action_label": "Zweryfikuj",
-                    "hint": "Po nagraniu wsun płytę i uruchom verify.",
+                    "action_label": "Test ISO",
+                    "hint": "Po nagraniu wsun płytę i uruchom test ISO albo test plik po pliku.",
+                    "secondary_actions": [
+                        {
+                            "path": "/speed-verify",
+                            "label": "Test plik po pliku",
+                            "disc_code": disc["disc_code"],
+                        }
+                    ],
                 })
                 if disc_status == "verify_failed":
-                    wizard["action_label"] = "Zweryfikuj ponownie"
+                    wizard["action_label"] = "Test ISO ponownie"
                     wizard["error"] = app.state.verify_status["message"]
             else:
                 wizard.update({
@@ -803,6 +820,12 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
     def verify(disc_code: str = Form(...)):
         reload_status_snapshot()
         start_verify_job("web", disc_code)
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/speed-verify")
+    def speed_verify(disc_code: str = Form(...)):
+        reload_status_snapshot()
+        start_verify_job("web", disc_code, speed=True)
         return RedirectResponse(url="/", status_code=303)
 
     @app.api_route("/burn", methods=["GET", "HEAD"])
