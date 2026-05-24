@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 StageProgressCallback = Callable[[str, int, int], None]
 BurnProgressCallback = Callable[[str, str, float | None], None]
 VerifyProgressCallback = Callable[[str, int, int], None]
+_VERIFY_COMPARE_CHUNK_SIZE = 8 * 1024 * 1024
 _MEDIA_BLOCKS_PATTERN = re.compile(
     r"Media blocks\s*:\s*\d+\s+readable\s*,\s*(\d+)\s+writable\s*,\s*(\d+)\s+overall",
     re.IGNORECASE,
@@ -152,6 +153,11 @@ def stage_disc(
     progress_callback: StageProgressCallback | None = None,
 ) -> StageResult:
     disc = _disc_row(conn, disc_code)
+    if disc["status"] not in {"planned", "approved", "staged"}:
+        raise RuntimeError(
+            f"Disc {disc_code} cannot be staged from status {disc['status']}. "
+            "Only planned, approved, and staged discs can be staged."
+        )
     files = _disc_files(conn, disc["id"])
     _ensure_staging_space(settings)
     logger.info("staging disc %s with %d files", disc_code, len(files))
@@ -186,7 +192,16 @@ def stage_disc(
 
     now = datetime.now(UTC).isoformat()
     with transaction(conn):
-        conn.execute("UPDATE discs SET status = 'staged', updated_at = ? WHERE id = ?", (now, disc["id"]))
+        conn.execute(
+            """
+            UPDATE discs
+            SET status = 'staged',
+                approved_at = COALESCE(approved_at, ?),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, disc["id"]),
+        )
         conn.execute(
             "UPDATE files SET status = 'staged' WHERE disc_id = ? AND status IN ('planned', 'approved', 'staged')",
             (disc["id"],),
@@ -376,6 +391,64 @@ def _extract_iso_file_to_path(optical_device: str, iso_rr_path: str, dest_path: 
         raise RuntimeError(f"Unable to read {iso_rr_path} from disc: {error_text or result.returncode}")
 
 
+def _compare_iso_with_device(
+    iso_path: Path,
+    device_path: str,
+    progress_callback: VerifyProgressCallback | None = None,
+    disc_code: str | None = None,
+) -> None:
+    expected_size = iso_path.stat().st_size
+    if expected_size == 0:
+        raise RuntimeError(f"ISO image is empty: {iso_path}")
+
+    compared_bytes = 0
+    total_chunks = max(1, (expected_size + _VERIFY_COMPARE_CHUNK_SIZE - 1) // _VERIFY_COMPARE_CHUNK_SIZE)
+    compared_chunks = 0
+    last_reported_chunk = 0
+
+    with iso_path.open("rb") as iso_handle, Path(device_path).open("rb") as device_handle:
+        while compared_bytes < expected_size:
+            bytes_left = expected_size - compared_bytes
+            chunk_size = min(_VERIFY_COMPARE_CHUNK_SIZE, bytes_left)
+            iso_chunk = iso_handle.read(chunk_size)
+            device_chunk = device_handle.read(chunk_size)
+            if len(iso_chunk) != chunk_size:
+                raise RuntimeError(f"Unexpected end of ISO image while verifying: {iso_path}")
+            if len(device_chunk) != chunk_size:
+                raise RuntimeError(
+                    "Unexpected end of optical device while verifying. "
+                    f"Expected {expected_size} bytes from {device_path}."
+                )
+            if iso_chunk != device_chunk:
+                raise RuntimeError(
+                    "Disc contents differ from the generated ISO image. "
+                    f"First mismatch after {compared_bytes} bytes."
+                )
+            compared_bytes += chunk_size
+            compared_chunks += 1
+            if (
+                progress_callback is not None
+                and disc_code is not None
+                and (compared_chunks == total_chunks or compared_chunks - last_reported_chunk >= 8)
+            ):
+                progress_callback(disc_code, compared_chunks, total_chunks)
+                last_reported_chunk = compared_chunks
+
+
+def _mark_disc_verified(conn: sqlite3.Connection, settings: Settings, disc_id: int, disc_code: str) -> None:
+    now = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute("UPDATE discs SET status = 'verified', updated_at = ? WHERE id = ?", (now, disc_id))
+        conn.execute(
+            "UPDATE files SET status = 'verified', archived_at = ?, changed_after_archive = 0 WHERE disc_id = ?",
+            (now, disc_id),
+        )
+    stage_dir = settings.staging_dir / disc_code
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+        logger.info("removed staging directory after verify: %s", stage_dir)
+
+
 def _verify_disc_from_device(
     conn: sqlite3.Connection,
     settings: Settings,
@@ -388,6 +461,19 @@ def _verify_disc_from_device(
     disc = _disc_row(conn, disc_code)
     files = _disc_files(conn, disc["id"])
     logger.info("verify from device started for %s using %s", disc_code, settings.optical_device)
+
+    iso_path = settings.iso_dir / f"{disc_code}.iso"
+    if iso_path.exists():
+        logger.info("using fast device-level verify for %s against %s", disc_code, iso_path)
+        _compare_iso_with_device(
+            iso_path,
+            settings.optical_device,
+            progress_callback=progress_callback,
+            disc_code=disc_code,
+        )
+        _mark_disc_verified(conn, settings, disc["id"], disc_code)
+        logger.info("fast verify from device completed for %s (%d files)", disc_code, len(files))
+        return VerifyResult(disc_code=disc_code, checked_files=len(files))
 
     with TemporaryDirectory(prefix=f"archiver-verify-{disc_code.lower()}-") as temp_root_str:
         temp_root = Path(temp_root_str)
@@ -409,17 +495,7 @@ def _verify_disc_from_device(
                 temp_root / "index" / index_name,
             )
 
-    now = datetime.now(UTC).isoformat()
-    with transaction(conn):
-        conn.execute("UPDATE discs SET status = 'verified', updated_at = ? WHERE id = ?", (now, disc["id"]))
-        conn.execute(
-            "UPDATE files SET status = 'verified', archived_at = ?, changed_after_archive = 0 WHERE disc_id = ?",
-            (now, disc["id"]),
-        )
-    stage_dir = settings.staging_dir / disc_code
-    if stage_dir.exists():
-        shutil.rmtree(stage_dir)
-        logger.info("removed staging directory after verify: %s", stage_dir)
+    _mark_disc_verified(conn, settings, disc["id"], disc_code)
     logger.info("verify from device completed for %s (%d files)", disc_code, len(files))
     return VerifyResult(disc_code=disc_code, checked_files=len(files))
 
@@ -677,6 +753,11 @@ def burn_disc(
 
 
 def verify_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str, mount_path: Path | None = None) -> VerifyResult:
+    if mount_path is None and settings.optical_device:
+        iso_path = settings.iso_dir / f"{disc_code}.iso"
+        if iso_path.exists():
+            return _verify_disc_from_device(conn, settings, disc_code)
+
     disc = _disc_row(conn, disc_code)
     verify_root = mount_path or settings.verify_mount
     logger.info("verify started for %s using mount %s", disc_code, verify_root)
@@ -696,16 +777,15 @@ def verify_disc(conn: sqlite3.Connection, settings: Settings, disc_code: str, mo
     if not index_csv.exists() or not index_json.exists():
         raise RuntimeError("Index files missing on disc")
 
-    now = datetime.now(UTC).isoformat()
-    with transaction(conn):
-        conn.execute("UPDATE discs SET status = 'verified', updated_at = ? WHERE id = ?", (now, disc["id"]))
-        conn.execute(
-            "UPDATE files SET status = 'verified', archived_at = ?, changed_after_archive = 0 WHERE disc_id = ?",
-            (now, disc["id"]),
-        )
-    stage_dir = settings.staging_dir / disc_code
-    if stage_dir.exists():
-        shutil.rmtree(stage_dir)
-        logger.info("removed staging directory after verify: %s", stage_dir)
+    _mark_disc_verified(conn, settings, disc["id"], disc_code)
     logger.info("verify completed for %s (%d files)", disc_code, len(files))
     return VerifyResult(disc_code=disc_code, checked_files=len(files))
+
+
+def verify_disc_from_device(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    disc_code: str,
+    progress_callback: VerifyProgressCallback | None = None,
+) -> VerifyResult:
+    return _verify_disc_from_device(conn, settings, disc_code, progress_callback=progress_callback)

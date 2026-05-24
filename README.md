@@ -35,6 +35,7 @@ Aplikacja czyta ustawienia z pliku `.env` lub zmiennych srodowiskowych:
 
 ```bash
 ARCHIVER_DB_PATH=/home/piotr/sandbox/archiver/data/archive.db
+ARCHIVER_BACKUPS_DIR=/home/piotr/sandbox/archiver/backups
 ARCHIVER_ROOTS=/mnt/NASz
 ARCHIVER_MANIFESTS_DIR=/home/piotr/sandbox/archiver/manifests
 ARCHIVER_DISC_SIZE_GB=100
@@ -44,6 +45,8 @@ ARCHIVER_WEB_HOST=0.0.0.0
 ARCHIVER_WEB_PORT=8765
 ARCHIVER_AUTO_PLAN=true
 ARCHIVER_AUTO_VERIFY=false
+ARCHIVER_AUTO_BACKUP_AFTER_VERIFY=true
+ARCHIVER_BACKUP_KEEP=2
 ARCHIVER_VERIFY_RETRY_COUNT=10
 ARCHIVER_VERIFY_RETRY_DELAY_SECONDS=6
 ARCHIVER_VERIFY_MOUNT_WAIT_SECONDS=20
@@ -83,6 +86,31 @@ Inicjalizacja bazy:
 
 ```bash
 archiver init-db
+```
+
+Backup bazy SQLite:
+
+```bash
+archiver backup-db
+```
+
+Domyslnie backup trafia do `ARCHIVER_BACKUPS_DIR` z nazwa typu:
+
+```text
+archive-20260524T101530Z.db
+```
+
+Mozesz tez podac wlasna sciezke:
+
+```bash
+archiver backup-db --output /home/piotr/sandbox/archiver/backups/manual-before-replan.db
+```
+
+Po udanym `verify` aplikacja moze tez automatycznie tworzyc backup bazy i trzymac tylko ostatnie kopie:
+
+```bash
+ARCHIVER_AUTO_BACKUP_AFTER_VERIFY=true
+ARCHIVER_BACKUP_KEEP=2
 ```
 
 Skan katalogow:
@@ -150,7 +178,8 @@ scan -> plan -> approve -> stage
 Celowo zatrzymuje sie przed `burn`.
 
 W praktyce `burn` domyslnie konczy sie po nagraniu. `verify` uruchamiasz osobno po ponownym wsunieciu plyty albo z przycisku w GUI.
-Krok `verify` odczytuje pliki bezposrednio z napedu, bez recznego mountowania plyty.
+Krok `verify` odczytuje dane bezposrednio z napedu, bez recznego mountowania plyty.
+Jesli lokalny plik `iso/DISC-XXXX.iso` nadal istnieje, verify z napedu najpierw porownuje cala plyte sekwencyjnie z obrazem ISO, co jest duzo szybsze niz sprawdzanie kazdego pliku osobno. Fallback do trybu plik-po-pliku zostaje tylko na wypadek braku lokalnego ISO.
 
 Przygotowanie stagingu:
 
@@ -203,7 +232,7 @@ Przed startem `growisofs` narzedzie:
 
 Jesli `growisofs` wypisze komunikaty typu `Input/output error`, `write failed` albo `FLUSH CACHE failed`, burn zostanie oznaczony jako `burn_failed`, nawet jesli proces zwroci kod `0`.
 
-`verify` jest osobnym krokiem od `burn` i oznacza pliki jako `verified` dopiero po zgodnosci hashy z zawartoscia plyty.
+`verify` jest osobnym krokiem od `burn` i oznacza pliki jako `verified` dopiero po zgodnosci zawartosci plyty z oczekiwanym archiwum.
 Po udanym `verify` katalog `staging/DISC-XXXX/` jest automatycznie usuwany.
 Jesli automatyczny verify po `burn` sie nie powiedzie, plyta dostaje status `verify_failed` i mozna powtorzyc tylko sam krok verify.
 

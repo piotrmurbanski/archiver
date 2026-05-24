@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
 import uvicorn
 
-from .burner import burn_disc, mount_and_verify_disc, stage_disc, verify_disc
+from .burner import burn_disc, stage_disc, verify_disc, verify_disc_from_device
 from .config import load_settings
 from .db import connect, init_db
 from .logging_setup import configure_logging
@@ -31,11 +32,47 @@ def _format_bytes(size: int) -> str:
     return f"{size} B"
 
 
+def _backup_db(source_conn: sqlite3.Connection, source_path: Path, backup_path: Path) -> Path:
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    destination = sqlite3.connect(backup_path)
+    try:
+        source_conn.backup(destination)
+    finally:
+        destination.close()
+    logger.info("database backup created: source=%s backup=%s", source_path, backup_path)
+    return backup_path
+
+
+def _prune_old_backups(backups_dir: Path, keep: int) -> None:
+    if keep < 1 or not backups_dir.exists():
+        return
+    backups = sorted(
+        backups_dir.glob("archive-*.db"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    for stale_backup in backups[keep:]:
+        stale_backup.unlink(missing_ok=True)
+        logger.info("removed old database backup: %s", stale_backup)
+
+
+def _auto_backup_after_verify(conn: sqlite3.Connection, settings, disc_code: str) -> Path | None:
+    if not settings.auto_backup_after_verify:
+        return None
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = settings.backups_dir / f"archive-{disc_code.lower()}-{timestamp}.db"
+    created = _backup_db(conn, settings.db_path, backup_path)
+    _prune_old_backups(settings.backups_dir, settings.backup_keep)
+    return created
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="archiver")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("init-db")
+    backup = subparsers.add_parser("backup-db")
+    backup.add_argument("--output", default=None)
     subparsers.add_parser("scan")
     subparsers.add_parser("start")
     subparsers.add_parser("status")
@@ -73,6 +110,19 @@ def main() -> None:
         return
 
     init_db(conn)
+
+    if args.command == "backup-db":
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        output_path = (
+            Path(args.output).expanduser()
+            if args.output
+            else settings.backups_dir / f"archive-{timestamp}.db"
+        )
+        backup_path = _backup_db(conn, settings.db_path, output_path)
+        if not args.output:
+            _prune_old_backups(settings.backups_dir, settings.backup_keep)
+        print(f"Database backup created at {backup_path}")
+        return
 
     if args.command == "scan":
         result = run_scan_cycle(conn, settings)
@@ -202,12 +252,16 @@ def main() -> None:
     if args.command == "verify":
         mount_path = Path(args.mount_path) if args.mount_path else None
         result = verify_disc(conn, settings, args.disc_code, mount_path=mount_path)
+        backup_path = _auto_backup_after_verify(conn, settings, result.disc_code)
         send_notification(settings, "Archiver: verify complete", f"{result.disc_code} verified successfully")
         print(f"Verified {result.disc_code}: {result.checked_files} files")
+        if backup_path is not None:
+            print(f"Database backup created at {backup_path}")
         return
 
     if args.command == "verify-worker":
         status_file = settings.db_path.parent / "web-status.json"
+        verify_progress_step = 10
 
         def persist_verify_status(status: dict[str, object]) -> None:
             payload = load_status_payload(status_file, settings)
@@ -218,24 +272,52 @@ def main() -> None:
             "state": "running",
             "disc_code": args.disc_code,
             "progress_percent": None,
+            "verified_files": 0,
+            "total_files": 0,
             "started_at": datetime.now(UTC).isoformat(),
             "finished_at": None,
             "message": f"Verify wystartowalo dla {args.disc_code}. Odczytuje pliki bezposrednio z plyty.",
         })
+
+        def verify_progress_callback(disc_code: str, verified_files: int, total_files: int) -> None:
+            if verified_files % verify_progress_step != 0 and verified_files != total_files:
+                return
+            payload = load_status_payload(status_file, settings)
+            current = payload.get("verify_status", {})
+            progress_percent = (verified_files / total_files * 100.0) if total_files else None
+            persist_verify_status({
+                "state": "running",
+                "disc_code": disc_code,
+                "progress_percent": progress_percent,
+                "verified_files": verified_files,
+                "total_files": total_files,
+                "started_at": current.get("started_at"),
+                "finished_at": None,
+                "message": f"Verify {disc_code}: {verified_files}/{total_files}",
+            })
         try:
-            result = mount_and_verify_disc(conn, settings, args.disc_code)
+            result = verify_disc_from_device(conn, settings, args.disc_code, progress_callback=verify_progress_callback)
+            backup_path = _auto_backup_after_verify(conn, settings, result.disc_code)
             payload = load_status_payload(status_file, settings)
             current = payload.get("verify_status", {})
             persist_verify_status({
                 "state": "verified",
                 "disc_code": result.disc_code,
                 "progress_percent": 100.0,
+                "verified_files": result.checked_files,
+                "total_files": result.checked_files,
                 "started_at": current.get("started_at"),
                 "finished_at": datetime.now(UTC).isoformat(),
-                "message": f"Verify zakonczone dla {result.disc_code}.",
+                "message": (
+                    f"Verify zakonczone dla {result.disc_code}. Backup: {backup_path.name}"
+                    if backup_path is not None
+                    else f"Verify zakonczone dla {result.disc_code}."
+                ),
             })
             send_notification(settings, "Archiver: verify complete", f"{result.disc_code} verified successfully")
             print(f"Verified {result.disc_code}: {result.checked_files} files")
+            if backup_path is not None:
+                print(f"Database backup created at {backup_path}")
             return
         except Exception as exc:
             payload = load_status_payload(status_file, settings)
@@ -244,6 +326,8 @@ def main() -> None:
                 "state": "verify_failed",
                 "disc_code": args.disc_code,
                 "progress_percent": current.get("progress_percent"),
+                "verified_files": current.get("verified_files", 0),
+                "total_files": current.get("total_files", 0),
                 "started_at": current.get("started_at"),
                 "finished_at": datetime.now(UTC).isoformat(),
                 "message": str(exc),

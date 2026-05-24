@@ -54,6 +54,8 @@ def default_status_payload(settings: Settings) -> dict[str, object]:
             "state": "idle",
             "disc_code": None,
             "progress_percent": None,
+            "verified_files": 0,
+            "total_files": 0,
             "started_at": None,
             "finished_at": None,
             "message": "No verify started yet.",

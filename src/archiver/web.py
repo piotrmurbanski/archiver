@@ -205,6 +205,8 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "state": "failed",
             "disc_code": disc_code if disc_code is not None else app.state.verify_status["disc_code"],
             "progress_percent": app.state.verify_status["progress_percent"],
+            "verified_files": app.state.verify_status["verified_files"],
+            "total_files": app.state.verify_status["total_files"],
             "started_at": app.state.verify_status["started_at"],
             "finished_at": datetime.now(UTC).isoformat(),
             "message": message,
@@ -261,7 +263,11 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
 
     def resolve_planning_limit(plan_target: str) -> tuple[int, str]:
         if plan_target == "media":
-            probe = probe_optical_media(settings)
+            try:
+                probe = probe_optical_media(settings)
+            except Exception as exc:
+                logger.warning("media-based planning unavailable, falling back to profile: %s", exc)
+                return settings.planning_limit_bytes, "profile-fallback"
             update_media_probe({
                 "writable_bytes": probe.writable_bytes,
                 "writable_blocks": probe.writable_blocks,
@@ -330,7 +336,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
         threading.Thread(target=worker, name="archiver-scan", daemon=True).start()
         return True
 
-    def start_plan_job(trigger: str, plan_target: str = "profile") -> bool:
+    def start_plan_job(trigger: str, plan_target: str = "media") -> bool:
         busy_message = workflow_busy_message()
         if busy_message is not None:
             set_plan_message(busy_message)
@@ -394,7 +400,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
         threading.Thread(target=worker, name="archiver-plan", daemon=True).start()
         return True
 
-    def start_replan_job(trigger: str, disc_code: str, plan_target: str = "profile") -> bool:
+    def start_replan_job(trigger: str, disc_code: str, plan_target: str = "media") -> bool:
         busy_message = workflow_busy_message()
         if busy_message is not None:
             set_plan_message(busy_message, disc_code)
@@ -588,6 +594,8 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "state": "idle",
             "disc_code": disc_code,
             "progress_percent": None,
+            "verified_files": 0,
+            "total_files": 0,
             "started_at": None,
             "finished_at": None,
             "message": "Verify jeszcze nie wystartowalo dla tej plyty.",
@@ -621,6 +629,8 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "state": "running",
             "disc_code": disc_code,
             "progress_percent": None,
+            "verified_files": 0,
+            "total_files": 0,
             "started_at": datetime.now(UTC).isoformat(),
             "finished_at": None,
             "message": f"Verify wystartowalo przez {trigger}. Wsun plyte, aplikacja odczyta ja bezposrednio z napedu.",
@@ -652,6 +662,17 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
     def index(request: Request):
         reload_status_snapshot()
         summary = status_summary(conn)
+        workflow_busy = any(
+            status["state"] == "running"
+            for status in (
+                app.state.scan_status,
+                app.state.plan_status,
+                app.state.stage_status,
+                app.state.burn_status,
+                app.state.verify_status,
+                app.state.prepare_status,
+            )
+        )
         media_probe = app.state.media_probe
         if (
             settings.optical_device
@@ -670,17 +691,63 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                 update_media_probe(media_probe)
             except Exception:
                 media_probe = None
-        auto_refresh = any(
-            status["state"] == "running"
-            for status in (
-                app.state.scan_status,
-                app.state.plan_status,
-                app.state.stage_status,
-                app.state.burn_status,
-                app.state.verify_status,
-                app.state.prepare_status,
-            )
-        )
+        auto_refresh = workflow_busy
+        disc = summary["planned_disc"]
+        wizard = {
+            "heading": "Następny krok",
+            "description": "Brak aktywnej partii. Zacznij od planowania.",
+            "action_path": "/plan",
+            "action_label": "Zaplanuj",
+            "disc_code": None,
+            "show": True,
+            "disabled": workflow_busy,
+            "error": None,
+            "hint": None,
+        }
+        if app.state.plan_status["state"] == "failed" and disc is None:
+            wizard.update({
+                "description": "Planowanie nie powiodło się.",
+                "action_path": "/plan",
+                "action_label": "Spróbuj planowania ponownie",
+                "error": app.state.plan_status["message"],
+            })
+        elif disc is not None:
+            disc_status = disc["status"]
+            wizard["disc_code"] = disc["disc_code"]
+            if disc_status in {"planned", "approved"}:
+                wizard.update({
+                    "description": f"{disc['disc_code']} jest gotowa do stage.",
+                    "action_path": "/stage",
+                    "action_label": "Stage",
+                })
+            elif disc_status == "staged":
+                wizard.update({
+                    "description": f"{disc['disc_code']} jest przygotowana do nagrania.",
+                    "action_path": "/burn",
+                    "action_label": "Nagraj",
+                })
+            elif disc_status == "burn_failed":
+                wizard.update({
+                    "description": f"Nagrywanie {disc['disc_code']} nie powiodło się.",
+                    "action_path": "/burn",
+                    "action_label": "Nagraj ponownie",
+                    "error": app.state.burn_status["message"],
+                })
+            elif disc_status in {"burned", "verify_failed"}:
+                wizard.update({
+                    "description": f"{disc['disc_code']} czeka na verify.",
+                    "action_path": "/verify",
+                    "action_label": "Zweryfikuj",
+                    "hint": "Po nagraniu wsun płytę i uruchom verify.",
+                })
+                if disc_status == "verify_failed":
+                    wizard["action_label"] = "Zweryfikuj ponownie"
+                    wizard["error"] = app.state.verify_status["message"]
+            else:
+                wizard.update({
+                    "description": f"Bieżący status płyty: {disc_status}",
+                    "show": False,
+                })
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -695,19 +762,21 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                 "prepare_status": app.state.prepare_status,
                 "media_probe": media_probe,
                 "verify_status": app.state.verify_status,
+                "workflow_busy": workflow_busy,
+                "wizard": wizard,
                 "auto_refresh": auto_refresh,
                 "auto_refresh_seconds": 4,
             },
         )
 
     @app.post("/plan")
-    def plan(plan_target: str = Form("profile")):
+    def plan(plan_target: str = Form("media")):
         reload_status_snapshot()
         start_plan_job("web", plan_target=plan_target)
         return RedirectResponse(url="/", status_code=303)
 
     @app.post("/replan")
-    def replan(disc_code: str = Form(...), plan_target: str = Form("profile")):
+    def replan(disc_code: str = Form(...), plan_target: str = Form("media")):
         reload_status_snapshot()
         start_replan_job("web", disc_code, plan_target=plan_target)
         return RedirectResponse(url="/", status_code=303)

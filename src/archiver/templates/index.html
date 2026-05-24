@@ -177,14 +177,35 @@
       <section class="two-col" style="margin-bottom: 16px;">
         <article class="card">
           <div class="section-title">
-            <h2>Aktualna płyta</h2>
+            <h2>{{ wizard.heading }}</h2>
             {% if summary.planned_disc %}
               <span class="muted">{{ summary.planned_disc["status"] }}</span>
             {% endif %}
           </div>
           {% set disc = summary.planned_disc %}
-          {% set workflow_busy = scan_status["state"] == "running" or plan_status["state"] == "running" or stage_status["state"] == "running" or burn_status["state"] == "running" or prepare_status["state"] == "running" %}
-          {% set disc_status = disc["status"] if disc else None %}
+          {% if wizard.show %}
+            <p>{{ wizard.description }}</p>
+            {% if wizard.error %}
+              <p class="warn" style="white-space: pre-wrap;">{{ wizard.error }}</p>
+            {% endif %}
+            {% if wizard.hint %}
+              <p class="muted">{{ wizard.hint }}</p>
+            {% endif %}
+            <div class="actions">
+              <form method="post" action="{{ wizard.action_path }}">
+                {% if wizard.disc_code %}
+                  <input type="hidden" name="disc_code" value="{{ wizard.disc_code }}">
+                {% endif %}
+                <button type="submit" {% if wizard.disabled %}disabled{% endif %}>{{ wizard.action_label }}</button>
+              </form>
+            </div>
+          {% else %}
+            <p class="muted">Brak dostępnego następnego kroku.</p>
+          {% endif %}
+        </article>
+
+        <article class="card">
+          <h2>Aktualna płyta</h2>
           {% if summary.planned_disc %}
             <p>
               <strong>{{ summary.planned_disc["disc_code"] }}</strong>
@@ -195,70 +216,9 @@
               Pliki: {{ summary.planned_disc["file_count"] }}<br>
               Rozmiar: {{ (summary.planned_disc["planned_bytes"] / 1024 / 1024 / 1024) | round(2) }} GiB
             </p>
-            <div class="actions">
-              <form method="post" action="/replan">
-                <input type="hidden" name="disc_code" value="{{ disc['disc_code'] if disc else '' }}">
-                <button type="submit" class="secondary" {% if not disc or disc_status not in ["planned", "approved", "staged", "burn_failed", "verify_failed"] or workflow_busy %}disabled{% endif %}>Zaplanuj jeszcze raz</button>
-              </form>
-              {% if media_probe %}
-                <form method="post" action="/replan">
-                  <input type="hidden" name="disc_code" value="{{ disc['disc_code'] if disc else '' }}">
-                  <input type="hidden" name="plan_target" value="media">
-                  <button type="submit" class="secondary" {% if not disc or disc_status not in ["planned", "approved", "staged", "burn_failed", "verify_failed"] or workflow_busy %}disabled{% endif %}>Dostosuj do włożonej płyty</button>
-                </form>
-              {% endif %}
-              <form method="post" action="/approve">
-                <input type="hidden" name="disc_code" value="{{ disc['disc_code'] if disc else '' }}">
-                <button type="submit" class="secondary" {% if not disc or disc_status != "planned" or workflow_busy %}disabled{% endif %}>Zatwierdź</button>
-              </form>
-              <form method="post" action="/stage">
-                <input type="hidden" name="disc_code" value="{{ disc['disc_code'] if disc else '' }}">
-                <button type="submit" class="secondary" {% if not disc or disc_status != "approved" or workflow_busy %}disabled{% endif %}>Stage</button>
-              </form>
-              <form method="post" action="/burn">
-                <input type="hidden" name="disc_code" value="{{ disc['disc_code'] if disc else '' }}">
-                <button type="submit" {% if not disc or disc_status not in ["staged", "burn_failed"] or workflow_busy %}disabled{% endif %}>{{ "Nagraj ponownie" if disc_status == "burn_failed" else "Nagraj" }}</button>
-              </form>
-              <form method="post" action="/verify">
-                <input type="hidden" name="disc_code" value="{{ disc['disc_code'] if disc else '' }}">
-                <button type="submit" class="secondary" {% if not disc or disc_status not in ["burned", "verify_failed"] or workflow_busy %}disabled{% endif %}>Zweryfikuj ponownie</button>
-              </form>
-            </div>
-            {% if summary.planned_disc["status"] in ["burned", "verify_failed"] %}
-              <p class="warn">
-                Po nagraniu wsun płytę i kliknij
-                <strong>Zweryfikuj ponownie</strong>. W razie potrzeby uruchom też z CLI:
-                <code>archiver verify {{ summary.planned_disc["disc_code"] }}</code>
-              </p>
-            {% endif %}
           {% else %}
             <p class="muted">Brak aktywnej partii.</p>
           {% endif %}
-        </article>
-
-        <article class="card">
-          <h2>Akcje</h2>
-          <div class="actions">
-            <form method="post" action="/scan">
-              <button type="submit" class="secondary" {% if workflow_busy %}disabled{% endif %}>Skan</button>
-            </form>
-            <form method="post" action="/plan">
-              <button type="submit" class="secondary" {% if workflow_busy %}disabled{% endif %}>Zaplanuj kolejną płytę</button>
-            </form>
-            {% if media_probe %}
-              <form method="post" action="/plan">
-                <input type="hidden" name="plan_target" value="media">
-                <button type="submit" class="secondary" {% if workflow_busy %}disabled{% endif %}>Zaplanuj pod włożoną płytę</button>
-              </form>
-            {% endif %}
-            <form method="post" action="/prepare">
-              <button type="submit" {% if workflow_busy %}disabled{% endif %}>Zrób wszystko do nagrania</button>
-            </form>
-          </div>
-          <p class="muted" style="margin-top: 12px;">
-            „Zrób wszystko” wykonuje: skan, plan, zatwierdzenie i stage.
-            Kończy się przed nagrywaniem.
-          </p>
         </article>
       </section>
 
@@ -322,7 +282,9 @@
         <article class="card">
           <h2>5. Verify</h2>
           <div class="progress-big">
-            {% if verify_status["progress_percent"] is not none %}
+            {% if verify_status["total_files"] %}
+              {{ verify_status["verified_files"] }}/{{ verify_status["total_files"] }}
+            {% elif verify_status["progress_percent"] is not none %}
               {{ verify_status["progress_percent"] | round(1) }}%
             {% else %}
               -
@@ -392,6 +354,23 @@
             {% endfor %}
           </tbody>
         </table>
+      </section>
+
+      <section class="card" style="margin-bottom: 16px;">
+        <details>
+          <summary>Opcje dodatkowe</summary>
+          <div class="actions" style="margin-top: 14px;">
+            <form method="post" action="/scan">
+              <button type="submit" class="secondary" {% if workflow_busy %}disabled{% endif %}>Skan</button>
+            </form>
+            {% if summary.planned_disc %}
+              <form method="post" action="/replan">
+                <input type="hidden" name="disc_code" value="{{ summary.planned_disc['disc_code'] }}">
+                <button type="submit" class="secondary" {% if workflow_busy %}disabled{% endif %}>Zaplanuj jeszcze raz</button>
+              </form>
+            {% endif %}
+          </div>
+        </details>
       </section>
 
       <section class="card">

@@ -50,8 +50,18 @@ class PlanResult:
 
 
 def _next_disc_code(conn: sqlite3.Connection) -> str:
-    row = conn.execute("SELECT COUNT(*) AS count FROM discs").fetchone()
-    return f"DISC-{row['count'] + 1:04d}"
+    rows = conn.execute("SELECT disc_code FROM discs").fetchall()
+    max_number = 0
+    for row in rows:
+        disc_code = row["disc_code"]
+        if not isinstance(disc_code, str):
+            continue
+        if not disc_code.startswith("DISC-"):
+            continue
+        suffix = disc_code[5:]
+        if suffix.isdigit():
+            max_number = max(max_number, int(suffix))
+    return f"DISC-{max_number + 1:04d}"
 
 
 def _disc_label(date_from: str, date_to: str) -> str:
@@ -166,6 +176,7 @@ def plan_disc(
     settings: Settings,
     progress_callback: ProgressCallback | None = None,
     planning_limit_bytes: int | None = None,
+    disc_code_override: str | None = None,
 ) -> PlanResult:
     limit_bytes = planning_limit_bytes or settings.planning_limit_bytes
     logger.info("planning disc with limit=%d bytes", limit_bytes)
@@ -201,7 +212,7 @@ def plan_disc(
         logger.info("no files available for planning")
         return PlanResult(disc_code=None, file_count=0, total_bytes=0)
 
-    disc_code = _next_disc_code(conn)
+    disc_code = disc_code_override or _next_disc_code(conn)
     date_from = picked[0]["media_date"]
     date_to = picked[-1]["media_date"]
     now = datetime.now(UTC).isoformat()
@@ -309,10 +320,10 @@ def replan_disc(
     if disc is None:
         raise ValueError(f"Disc not found: {disc_code}")
 
-    if disc["status"] not in {"planned", "approved", "staged", "burn_failed"}:
+    if disc["status"] not in {"planned", "approved", "staged", "burn_failed", "verify_failed"}:
         raise ValueError(
             f"Disc {disc_code} cannot be replanned from status {disc['status']}. "
-            "Only planned, approved, staged, and burn_failed discs can be replanned."
+            "Only planned, approved, staged, burn_failed, and verify_failed discs can be replanned."
         )
 
     logger.info("replanning disc %s from status %s", disc_code, disc["status"])
@@ -350,4 +361,10 @@ def replan_disc(
                 child.rmdir()
         stage_dir.rmdir()
 
-    return plan_disc(conn, settings, progress_callback=progress_callback, planning_limit_bytes=planning_limit_bytes)
+    return plan_disc(
+        conn,
+        settings,
+        progress_callback=progress_callback,
+        planning_limit_bytes=planning_limit_bytes,
+        disc_code_override=disc_code,
+    )

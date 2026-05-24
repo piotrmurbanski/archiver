@@ -20,6 +20,7 @@ def _load_dotenv() -> None:
 @dataclass(slots=True)
 class Settings:
     db_path: Path
+    backups_dir: Path
     roots: list[Path]
     manifests_dir: Path
     staging_dir: Path
@@ -38,6 +39,8 @@ class Settings:
     auto_plan: bool
     notify_command: str | None
     auto_verify: bool
+    auto_backup_after_verify: bool
+    backup_keep: int
     verify_retry_count: int
     verify_retry_delay_seconds: int
     verify_mount_wait_seconds: int
@@ -63,6 +66,7 @@ def load_settings() -> Settings:
     roots_env = os.environ.get("ARCHIVER_ROOTS", "/mnt/NASz")
     roots = [Path(item).expanduser() for item in roots_env.split(",") if item.strip()]
     db_path = Path(os.environ.get("ARCHIVER_DB_PATH", "./data/archive.db")).expanduser()
+    backups_dir = Path(os.environ.get("ARCHIVER_BACKUPS_DIR", "./backups")).expanduser()
     manifests_dir = Path(os.environ.get("ARCHIVER_MANIFESTS_DIR", "./manifests")).expanduser()
     staging_dir = Path(os.environ.get("ARCHIVER_STAGING_DIR", "./staging")).expanduser()
     iso_dir = Path(os.environ.get("ARCHIVER_ISO_DIR", "./iso")).expanduser()
@@ -80,6 +84,8 @@ def load_settings() -> Settings:
     auto_plan = os.environ.get("ARCHIVER_AUTO_PLAN", "true").strip().lower() in {"1", "true", "yes", "on"}
     notify_command = os.environ.get("ARCHIVER_NOTIFY_COMMAND") or None
     auto_verify = os.environ.get("ARCHIVER_AUTO_VERIFY", "false").strip().lower() in {"1", "true", "yes", "on"}
+    auto_backup_after_verify = os.environ.get("ARCHIVER_AUTO_BACKUP_AFTER_VERIFY", "true").strip().lower() in {"1", "true", "yes", "on"}
+    backup_keep = int(os.environ.get("ARCHIVER_BACKUP_KEEP", "2"))
     verify_retry_count = int(os.environ.get("ARCHIVER_VERIFY_RETRY_COUNT", "10"))
     verify_retry_delay_seconds = int(os.environ.get("ARCHIVER_VERIFY_RETRY_DELAY_SECONDS", "6"))
     verify_mount_wait_seconds = int(os.environ.get("ARCHIVER_VERIFY_MOUNT_WAIT_SECONDS", "20"))
@@ -88,6 +94,7 @@ def load_settings() -> Settings:
     log_backup_count = int(os.environ.get("ARCHIVER_LOG_BACKUP_COUNT", "5"))
     return Settings(
         db_path=db_path,
+        backups_dir=backups_dir,
         roots=roots,
         manifests_dir=manifests_dir,
         staging_dir=staging_dir,
@@ -106,6 +113,8 @@ def load_settings() -> Settings:
         auto_plan=auto_plan,
         notify_command=notify_command,
         auto_verify=auto_verify,
+        auto_backup_after_verify=auto_backup_after_verify,
+        backup_keep=backup_keep,
         verify_retry_count=verify_retry_count,
         verify_retry_delay_seconds=verify_retry_delay_seconds,
         verify_mount_wait_seconds=verify_mount_wait_seconds,
