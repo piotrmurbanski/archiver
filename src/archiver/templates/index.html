@@ -285,6 +285,12 @@
             Koniec: {{ burn_status["finished_at"] or "-" }}
           </p>
           <p class="muted" style="white-space: pre-wrap;">{{ burn_status["message"] }}</p>
+          {% if burn_status["details"] %}
+            <details>
+              <summary>Szczegóły</summary>
+              <p class="muted" style="white-space: pre-wrap;">{{ burn_status["details"] }}</p>
+            </details>
+          {% endif %}
         </article>
 
         <article class="card">
@@ -305,6 +311,12 @@
             Koniec: {{ verify_status["finished_at"] or "-" }}
           </p>
           <p class="muted" style="white-space: pre-wrap;">{{ verify_status["message"] }}</p>
+          {% if verify_status["details"] %}
+            <details>
+              <summary>Szczegóły</summary>
+              <p class="muted" style="white-space: pre-wrap;">{{ verify_status["details"] }}</p>
+            </details>
+          {% endif %}
         </article>
       </section>
 

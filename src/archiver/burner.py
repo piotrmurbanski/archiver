@@ -36,6 +36,9 @@ _GROWISOFS_FATAL_MARKERS = (
     "flush cache failed",
     "reset occurred",
 )
+_BURN_READY_RETRIES = 6
+_BURN_READY_DELAY_SECONDS = 5
+_BURN_READY_STABLE_POLLS = 2
 
 
 @dataclass(slots=True)
@@ -332,7 +335,67 @@ def _log_optical_diagnostics(settings: Settings, context: str) -> None:
             logger.info("optical diagnostics (%s) dvd+rw-mediainfo:\n%s", context, output)
 
 
-_PERCENT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%\s+done", re.IGNORECASE)
+_PERCENT_DONE_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%\s+done", re.IGNORECASE)
+_PERCENT_INLINE_PATTERN = re.compile(r"\(\s*(\d+(?:\.\d+)?)%\)")
+
+
+def _extract_burn_progress_percent(message: str) -> float | None:
+    for pattern in (_PERCENT_DONE_PATTERN, _PERCENT_INLINE_PATTERN):
+        match = pattern.search(message)
+        if match:
+            return float(match.group(1))
+    return None
+
+
+def _clean_burn_output_line(line: str) -> str:
+    cleaned = line.strip()
+    for prefix in (":-[", ":-(", ":"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):].lstrip(" ]")
+    return cleaned.strip()
+
+
+def _summarize_burn_progress_line(disc_code: str, message: str) -> str:
+    progress_percent = _extract_burn_progress_percent(message)
+    if progress_percent is not None:
+        return f"Nagrywanie {disc_code}: {progress_percent:.1f}%"
+
+    lowered = message.lower()
+    if "pre-formatting blank bd-r" in lowered:
+        return f"Przygotowuję nośnik {disc_code} do nagrywania."
+    if "current write speed" in lowered:
+        return f"Napęd potwierdził prędkość zapisu dla {disc_code}."
+    if "flushing cache" in lowered:
+        return f"Kończę zapis i opróżniam cache dla {disc_code}."
+    if "closing disc" in lowered:
+        return f"Zamykam płytę {disc_code}."
+    if "reloading tray" in lowered:
+        return f"Napęd przeładowuje płytę {disc_code}."
+    return _clean_burn_output_line(message)
+
+
+def _summarize_growisofs_failure(disc_code: str, output_lines: list[str]) -> str:
+    progress_percent: float | None = None
+    interesting_lines: list[str] = []
+    for line in output_lines:
+        maybe_percent = _extract_burn_progress_percent(line)
+        if maybe_percent is not None:
+            progress_percent = maybe_percent
+        lowered = line.lower()
+        if any(marker in lowered for marker in _GROWISOFS_FATAL_MARKERS):
+            cleaned = _clean_burn_output_line(line)
+            if cleaned and cleaned not in interesting_lines:
+                interesting_lines.append(cleaned)
+
+    reason = interesting_lines[0] if interesting_lines else "Nieznany błąd nagrywania"
+    if len(interesting_lines) > 1:
+        reason = f"{reason}; {interesting_lines[1]}"
+    if progress_percent is not None:
+        return (
+            f"Nagrywanie {disc_code} nie powiodło się przy {progress_percent:.1f}%: "
+            f"{reason}. Szczegóły są w logu."
+        )
+    return f"Nagrywanie {disc_code} nie powiodło się: {reason}. Szczegóły są w logu."
 
 
 def _report_burn_progress(
@@ -342,9 +405,12 @@ def _report_burn_progress(
 ) -> None:
     if progress_callback is None:
         return
-    match = _PERCENT_PATTERN.search(message)
-    progress_percent = float(match.group(1)) if match else None
-    progress_callback(disc_code, message, progress_percent)
+    progress_percent = _extract_burn_progress_percent(message)
+    progress_callback(
+        disc_code,
+        _summarize_burn_progress_line(disc_code, message),
+        progress_percent,
+    )
 
 
 def _mounted_device_path(device: str) -> Path | None:
@@ -366,6 +432,84 @@ def _mounted_device_path(device: str) -> Path | None:
             if path.exists():
                 return path
     return None
+
+
+def _wait_for_optical_ready_for_burn(
+    settings: Settings,
+    disc_code: str,
+    progress_callback: BurnProgressCallback | None = None,
+) -> OpticalMediaProbe:
+    if not settings.optical_device:
+        raise RuntimeError("ARCHIVER_OPTICAL_DEVICE is not configured")
+
+    mounted_path = _mounted_device_path(settings.optical_device)
+    if mounted_path is not None:
+        logger.info("optical device %s is mounted at %s, unmounting before burn", settings.optical_device, mounted_path)
+        _report_burn_progress(
+            progress_callback,
+            disc_code,
+            f"Napęd był zamontowany w {mounted_path}. Odpinam go przed nagrywaniem.",
+        )
+        _unmount_optical_disc(settings, mounted_path)
+        time.sleep(2)
+
+    last_signature: tuple[int, str | None, str | None] | None = None
+    stable_polls = 0
+    last_probe: OpticalMediaProbe | None = None
+
+    for attempt in range(1, _BURN_READY_RETRIES + 1):
+        try:
+            probe = probe_optical_media(settings)
+        except Exception as exc:
+            logger.warning("optical ready probe %d/%d failed for %s: %s", attempt, _BURN_READY_RETRIES, disc_code, exc)
+            _report_burn_progress(
+                progress_callback,
+                disc_code,
+                f"Czekam az napęd będzie gotowy do nagrywania ({attempt}/{_BURN_READY_RETRIES}).",
+            )
+            time.sleep(_BURN_READY_DELAY_SECONDS)
+            continue
+
+        last_probe = probe
+        signature = (probe.writable_blocks, probe.media_current, probe.media_status)
+        is_writable = probe.writable_blocks > 0
+        if signature == last_signature and is_writable:
+            stable_polls += 1
+        else:
+            stable_polls = 1 if is_writable else 0
+            last_signature = signature
+
+        logger.info(
+            "optical ready probe %d/%d for %s: writable=%d status=%s current=%s stable=%d/%d",
+            attempt,
+            _BURN_READY_RETRIES,
+            disc_code,
+            probe.writable_blocks,
+            probe.media_status,
+            probe.media_current,
+            stable_polls,
+            _BURN_READY_STABLE_POLLS,
+        )
+        _report_burn_progress(
+            progress_callback,
+            disc_code,
+            (
+                f"Sprawdzam gotowość napędu ({attempt}/{_BURN_READY_RETRIES}): "
+                f"{probe.media_current or '-'}, {probe.media_status or '-'}."
+            ),
+        )
+        if stable_polls >= _BURN_READY_STABLE_POLLS:
+            logger.info("optical device ready for burn %s after %d probes", disc_code, attempt)
+            time.sleep(2)
+            return probe
+        time.sleep(_BURN_READY_DELAY_SECONDS)
+
+    if last_probe is not None:
+        raise RuntimeError(
+            "Napęd nie osiągnął stabilnego stanu gotowości do nagrywania. "
+            f"Ostatni stan: {last_probe.media_current or '-'}, {last_probe.media_status or '-'}."
+        )
+    raise RuntimeError("Napęd nie odpowiedział poprawnie podczas przygotowania do nagrywania.")
 
 
 def _extract_iso_file_to_path(optical_device: str, iso_rr_path: str, dest_path: Path) -> None:
@@ -726,15 +870,18 @@ def burn_disc(
     growisofs = _require_growisofs()
     now = datetime.now(UTC).isoformat()
     _log_optical_diagnostics(settings, f"before burn {disc_code}")
+    _wait_for_optical_ready_for_burn(settings, disc_code, progress_callback=progress_callback)
     logger.info("burn started for %s using device %s", disc_code, settings.optical_device)
     _report_burn_progress(progress_callback, disc_code, f"Nagrywanie wystartowalo dla {disc_code}.")
     with transaction(conn):
         conn.execute("UPDATE discs SET status = 'burning', updated_at = ? WHERE id = ?", (now, disc["id"]))
         conn.execute("UPDATE files SET status = 'burning' WHERE disc_id = ?", (disc["id"],))
+    output_lines: list[str] = []
     try:
         process = subprocess.Popen(
             [
                 growisofs,
+                "-speed=2",
                 "-dvd-compat",
                 "-Z",
                 f"{settings.optical_device}={iso_path}",
@@ -744,7 +891,6 @@ def burn_disc(
             text=True,
             bufsize=1,
         )
-        output_lines: list[str] = []
         assert process.stdout is not None
         for raw_line in process.stdout:
             line = raw_line.rstrip()
@@ -766,7 +912,8 @@ def burn_disc(
         _log_subprocess_output(f"growisofs burn for {disc_code}", exc)
         _log_optical_diagnostics(settings, f"after failed burn {disc_code}")
         logger.exception("burn failed for %s", disc_code)
-        _report_burn_progress(progress_callback, disc_code, f"Nagrywanie nie powiodlo sie: {exc}")
+        failure_summary = _summarize_growisofs_failure(disc_code, output_lines)
+        _report_burn_progress(progress_callback, disc_code, failure_summary)
         failed_at = datetime.now(UTC).isoformat()
         with transaction(conn):
             conn.execute("UPDATE discs SET status = 'burn_failed', updated_at = ? WHERE id = ?", (failed_at, disc["id"]))
@@ -774,8 +921,7 @@ def burn_disc(
                 "UPDATE files SET status = 'staged' WHERE disc_id = ? AND status = 'burning'",
                 (disc["id"],),
             )
-        error_text = ((exc.stdout or "") + "\n" + (exc.stderr or "")).strip()
-        raise RuntimeError(f"growisofs failed for {disc_code}: {error_text or exc}") from exc
+        raise RuntimeError(failure_summary) from exc
     burned_at = datetime.now(UTC).isoformat()
     logger.info("burn completed for %s", disc_code)
     _report_burn_progress(progress_callback, disc_code, f"Nagrywanie zakonczone dla {disc_code}. Start verify.")

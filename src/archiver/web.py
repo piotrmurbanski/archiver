@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -147,6 +148,39 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
         if app.state.prepare_status["state"] == "running":
             return "Trwa zlozony workflow. Poczekaj na jego zakonczenie."
         return None
+
+    def compact_ui_message(message: str | None, max_len: int = 220) -> tuple[str, str | None]:
+        if not message:
+            return "", None
+        normalized = message.strip()
+        if "\n" in normalized and "growisofs failed" in normalized.lower():
+            progress = None
+            reason = None
+            for line in normalized.splitlines():
+                match = re.search(r"\(\s*(\d+(?:\.\d+)?)%\)", line)
+                if match:
+                    progress = match.group(1)
+                lowered = line.lower()
+                if reason is None and (
+                    "unable to write@lba" in lowered
+                    or "write failed" in lowered
+                    or "input/output error" in lowered
+                    or "flush cache failed" in lowered
+                ):
+                    reason = re.sub(r"^[:\-\[\(\s]+", "", line).rstrip("]")
+            if reason:
+                summary = (
+                    f"Nagrywanie nie powiodło się przy {progress}%: {reason}."
+                    if progress
+                    else f"Nagrywanie nie powiodło się: {reason}."
+                )
+                return summary, normalized
+        first_line = normalized.splitlines()[0].strip()
+        summary = first_line[:max_len].rstrip()
+        if len(first_line) > max_len:
+            summary += "..."
+        details = normalized if normalized != summary else None
+        return summary, details
 
     def set_scan_message(message: str) -> None:
         update_scan_status({
@@ -305,6 +339,21 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                     plan_progress_callback=plan_progress_callback,
                     scan_progress_callback=scan_progress_callback,
                 )
+                if app.state.plan_status["state"] == "running":
+                    current_disc = active_disc(conn)
+                    if current_disc is not None:
+                        update_plan_status({
+                            "state": "completed",
+                            "disc_code": current_disc["disc_code"],
+                            "hashed_files": current_disc["file_count"],
+                            "total_files": current_disc["file_count"],
+                            "started_at": app.state.plan_status["started_at"],
+                            "finished_at": datetime.now(UTC).isoformat(),
+                            "message": (
+                                f"Planned {current_disc['disc_code']}: "
+                                f"{current_disc['file_count']} files (auto-plan po skanie)."
+                            ),
+                        })
                 update_root_checks(
                     [{"root": str(root), "available": True} for root in settings.roots]
                 )
@@ -522,7 +571,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                 if disc is None:
                     scan_result = run_scan_cycle(conn, settings, plan_progress_callback=plan_progress_callback)
                     update_root_checks(
-                        [{"root": str(root), "available": not scan_result.skipped} for root in settings.roots]
+                        [{"root": str(root), "available": root_is_available(root)} for root in settings.roots]
                     )
                     app.state.prepare_status["message"] = scan_result.message
                     save_status_snapshot()
@@ -671,6 +720,8 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
     def index(request: Request):
         reload_status_snapshot()
         summary = status_summary(conn)
+        burn_summary, burn_details = compact_ui_message(app.state.burn_status.get("message"))
+        verify_summary, verify_details = compact_ui_message(app.state.verify_status.get("message"))
         workflow_busy = any(
             status["state"] == "running"
             for status in (
@@ -704,9 +755,9 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
         disc = summary["planned_disc"]
         wizard = {
             "heading": "Następny krok",
-            "description": "Brak aktywnej partii. Zacznij od planowania.",
-            "action_path": "/plan",
-            "action_label": "Zaplanuj",
+            "description": "Brak danych w bazie. Zacznij od skanu źródeł.",
+            "action_path": "/scan",
+            "action_label": "Skan",
             "disc_code": None,
             "show": True,
             "disabled": workflow_busy,
@@ -714,12 +765,25 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
             "hint": None,
             "secondary_actions": [],
         }
+        if summary["total_files"] > 0 and disc is None:
+            wizard.update({
+                "description": "Brak aktywnej partii. Możesz zaplanować kolejną płytę.",
+                "action_path": "/plan",
+                "action_label": "Zaplanuj",
+            })
         if app.state.plan_status["state"] == "failed" and disc is None:
             wizard.update({
                 "description": "Planowanie nie powiodło się.",
                 "action_path": "/plan",
                 "action_label": "Spróbuj planowania ponownie",
                 "error": app.state.plan_status["message"],
+            })
+        elif app.state.scan_status["state"] == "failed" and summary["total_files"] == 0 and disc is None:
+            wizard.update({
+                "description": "Skan nie powiódł się.",
+                "action_path": "/scan",
+                "action_label": "Spróbuj skanu ponownie",
+                "error": app.state.scan_status["message"],
             })
         elif disc is not None:
             disc_status = disc["status"]
@@ -741,7 +805,7 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                     "description": f"Nagrywanie {disc['disc_code']} nie powiodło się.",
                     "action_path": "/burn",
                     "action_label": "Nagraj ponownie",
-                    "error": app.state.burn_status["message"],
+                    "error": burn_summary,
                 })
             elif disc_status in {"burned", "verify_failed"}:
                 wizard.update({
@@ -759,12 +823,18 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                 })
                 if disc_status == "verify_failed":
                     wizard["action_label"] = "Test ISO ponownie"
-                    wizard["error"] = app.state.verify_status["message"]
+                    wizard["error"] = verify_summary
             else:
                 wizard.update({
                     "description": f"Bieżący status płyty: {disc_status}",
                     "show": False,
                 })
+        burn_status_view = dict(app.state.burn_status)
+        burn_status_view["message"] = burn_summary
+        burn_status_view["details"] = burn_details
+        verify_status_view = dict(app.state.verify_status)
+        verify_status_view["message"] = verify_summary
+        verify_status_view["details"] = verify_details
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -775,10 +845,10 @@ def create_app(conn: sqlite3.Connection, settings: Settings, startup_scan: bool 
                 "scan_status": app.state.scan_status,
                 "plan_status": app.state.plan_status,
                 "stage_status": app.state.stage_status,
-                "burn_status": app.state.burn_status,
+                "burn_status": burn_status_view,
                 "prepare_status": app.state.prepare_status,
                 "media_probe": media_probe,
-                "verify_status": app.state.verify_status,
+                "verify_status": verify_status_view,
                 "workflow_busy": workflow_busy,
                 "wizard": wizard,
                 "auto_refresh": auto_refresh,
