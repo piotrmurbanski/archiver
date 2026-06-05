@@ -1,0 +1,70 @@
+[
+  {
+    "title": "DISC-0001",
+    "subtitle": "Archiwum 2006-10 do 2019-05",
+    "discs": [
+      "Etykieta: archive 2006-10..2019-05",
+      "Zakres dat: 2006-10-19 do 2019-05-01",
+      "Liczba plikow: 18 349",
+      "Zdjecia: 12 318, wideo: 994",
+      "Dokumenty: 171, inne pliki: 4 866"
+    ],
+    "highlights": [
+      "Glowne zrodla: Public, Kasia_priv, Piotrus_priv",
+      "Najwieksze zbiory: backup-google Photos from 2016-2019",
+      "Dodatkowo: Filip oraz Slub-zdjecia",
+      "Obraz ISO w repo: iso/DISC-0001.iso"
+    ]
+  },
+  {
+    "title": "DISC-0002",
+    "subtitle": "Archiwum 2019-05 do 2020-12",
+    "discs": [
+      "Etykieta: archive 2019-05..2020-12",
+      "Zakres dat: 2019-05-01 do 2020-12-01",
+      "Liczba plikow: 10 734",
+      "Zdjecia: 6 582, wideo: 844",
+      "Dokumenty: 26, inne pliki: 3 282"
+    ],
+    "highlights": [
+      "Glowne zrodla: Kasia_priv, Public, Piotrus_priv",
+      "Najwieksze zbiory: backup-google Photos from 2019-2020",
+      "Dodatkowo: zdjecia Filipa i materialy z telefonu z 2020",
+      "Obraz ISO w repo: iso/DISC-0002.iso"
+    ]
+  },
+  {
+    "title": "DISC-0003",
+    "subtitle": "Archiwum 2020-12 do 2022-02",
+    "discs": [
+      "Etykieta: archive 2020-12..2022-02",
+      "Zakres dat: 2020-12-01 do 2022-02-01",
+      "Liczba plikow: 9 004",
+      "Zdjecia: 5 267, wideo: 1 140",
+      "Dokumenty: 18, inne pliki: 2 579"
+    ],
+    "highlights": [
+      "Glowne zrodla: Kasia_priv, Public, Piotrus_priv",
+      "Najwieksze zbiory: backup-google Photos from 2021",
+      "Dodatkowo: Telefon K, Photos from 2022 i Ruczaj",
+      "Obraz ISO w repo: iso/DISC-0003.iso"
+    ]
+  },
+  {
+    "title": "DISC-0004",
+    "subtitle": "Archiwum 2022-02 do 2023-02",
+    "discs": [
+      "Etykieta: archive 2022-02..2023-02",
+      "Zakres dat: 2022-02-01 do 2023-02-01",
+      "Liczba plikow: 8 145",
+      "Zdjecia: 5 268, wideo: 1 253",
+      "Dokumenty: 10, inne pliki: 1 614"
+    ],
+    "highlights": [
+      "Glowne zrodla: Public, Kasia_priv, Piotrus_priv",
+      "Najwieksze zbiory: Telefon K, backup-google Photos from 2022",
+      "Dodatkowo: Xiaomi T9 backup i materialy z 2020-2022",
+      "Obraz ISO w repo: iso/DISC-0004.iso"
+    ]
+  }
+]

@@ -1,0 +1,36 @@
+[
+  {
+    "title": "DISC-0002",
+    "subtitle": "Archiwum 2019-05 do 2020-12",
+    "discs": [
+      "Etykieta: archive 2019-05..2020-12",
+      "Zakres dat: 2019-05-01 do 2020-12-01",
+      "Liczba plikow: 10 734",
+      "Zdjecia: 6 582, wideo: 844",
+      "Dokumenty: 26, inne pliki: 3 282"
+    ],
+    "highlights": [
+      "Glowne zrodla: Kasia_priv, Public, Piotrus_priv",
+      "Najwieksze zbiory: backup-google Photos from 2019-2020",
+      "Dodatkowo: zdjecia Filipa i materialy z telefonu z 2020",
+      "Obraz ISO w repo: iso/DISC-0002.iso"
+    ]
+  },
+  {
+    "title": "DISC-0003",
+    "subtitle": "Archiwum 2020-12 do 2022-02",
+    "discs": [
+      "Etykieta: archive 2020-12..2022-02",
+      "Zakres dat: 2020-12-01 do 2022-02-01",
+      "Liczba plikow: 9 004",
+      "Zdjecia: 5 267, wideo: 1 140",
+      "Dokumenty: 18, inne pliki: 2 579"
+    ],
+    "highlights": [
+      "Glowne zrodla: Kasia_priv, Public, Piotrus_priv",
+      "Najwieksze zbiory: backup-google Photos from 2021",
+      "Dodatkowo: Telefon K, Photos from 2022 i Ruczaj",
+      "Obraz ISO w repo: iso/DISC-0003.iso"
+    ]
+  }
+]
